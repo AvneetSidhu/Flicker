@@ -3,6 +3,7 @@ package vmagent
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -65,5 +66,38 @@ func TestConnectToSFU(t *testing.T) {
 
 	if s.sfu == nil {
 		t.Error("expected sfu connection to be non-nil")
+	}
+}
+
+func TestForward(t *testing.T) {
+	conn := &mockConn{}
+
+	svc := &AVService{
+		sfu: nil, 
+		logger: slog.Default().With("service", "av"),
+	}
+
+	packet := []byte("test rtp packet")
+
+	err := svc.forward(packet)
+	if err == nil {
+		t.Fatal("expected error when sfu is nil")
+	}
+
+	svc.sfu = conn
+
+	err = svc.forward(packet)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if !bytes.Equal(conn.written.Bytes(), packet) {
+		t.Errorf("expected %v, got %v", packet, conn.written.Bytes())
+	}
+
+	conn.failWrite = true
+	err = svc.forward(packet)
+	if err == nil {
+		t.Error("expected error when failWrite is true")
 	}
 }
