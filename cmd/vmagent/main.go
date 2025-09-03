@@ -7,10 +7,16 @@ import (
 	"os"
 
 	"github.com/AvneetSidhu/Flicker/internal/vmagent"
+	"github.com/joho/godotenv"
 )
 
 
 func loadConfig() (*vmagent.Config, error) {
+	err := godotenv.Load()
+	if err != nil {
+		return nil, fmt.Errorf("error loading .env file, %v", err)
+	}
+
 	portStr := os.Getenv("PORT")
 	if portStr == "" {
 		return nil, fmt.Errorf("missing PORT")
