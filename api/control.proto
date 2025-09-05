@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package helloworld;
+
+option go_package = "api/controlpb";
+
+import "google/protobuf/empty.proto";
+
+service InputService {
+    rpc StreamInputs(google.protobuf.Empty) returns (stream InputMessage);
+}
+
+message KeyboardInput {
+    string key = 1;
+    string action = 2;
+}
+
+message MouseInput {
+    double x = 1;
+    double y = 2;
+    string action = 3;
+    bool dragging = 4;
+}
+
+message ScrollInput {
+    string direction = 1;
+}
+
+message InputMessage {
+    oneof payload {
+        KeyboardInput keyboard = 1;
+        MouseInput mouse = 2;
+        ScrollInput scroll = 3;
+    }
+}
