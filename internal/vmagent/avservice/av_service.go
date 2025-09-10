@@ -14,8 +14,8 @@ type AVService struct {
 	logger *slog.Logger
 }
 
-func NewAVService(sfuConnection net.Conn, listenConnection net.PacketConn) *AVService {
-	return &AVService{sfu: sfuConnection, listen: listenConnection, logger: slog.Default().With("service", "av")}
+func NewAVService(sfuConnection net.Conn, listenConnection net.PacketConn, logger *slog.Logger) *AVService {
+	return &AVService{sfu: sfuConnection, listen: listenConnection, logger: logger}
 }
 
 func (s *AVService) StartIngest(ctx context.Context) {
@@ -23,7 +23,7 @@ func (s *AVService) StartIngest(ctx context.Context) {
 
 	for {
 		select {
-		case <- ctx.Done():
+		case <-ctx.Done():
 			s.logger.Info("shutdown signal received: ending ingest in av service")
 			return
 		default:
@@ -31,13 +31,13 @@ func (s *AVService) StartIngest(ctx context.Context) {
 
 			n, _, err := s.listen.ReadFrom(buf)
 			if err != nil {
-				s.logger.Error("error ingesting RTP", "err", err)
+				s.logger.Error("error ingesting RTP", slog.Any("error", err))
 				continue
 			}
 
 			err = s.forward(buf[:n])
 			if err != nil {
-				s.logger.Error("error forwarding rtp", "err", err)
+				s.logger.Error("error forwarding RTP", slog.Any("error", err))
 			}
 		}
 	}

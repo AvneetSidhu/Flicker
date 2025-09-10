@@ -13,22 +13,20 @@ type InjectorService struct {
 	logger *slog.Logger
 }
 
-func NewInjectorService(ch <-chan *controlpb.InputMessage) *InjectorService {
-	return &InjectorService{inputChan: ch, logger: slog.Default().With("service", "injector")}
+func NewInjectorService(ch <-chan *controlpb.InputMessage, logger *slog.Logger) *InjectorService {
+	return &InjectorService{inputChan: ch, logger: logger}
 }
 
 func (s *InjectorService) StartReadingInput(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Info("shutdown signal received, shutting down injector service")
+			s.logger.Info("shutdown signal received: ending ingest in injector service")
 			return
-		default:
-			msg := <-s.inputChan
-			if msg == nil {
-				continue
+		case msg := <-s.inputChan:
+			if msg != nil {
+				s.handleInput(msg)
 			}
-			s.handleInput(msg)
 		}
 	}
 }

@@ -49,7 +49,7 @@ func loadConfig() (*vmagent.Config, error) {
 	}, nil 
 }
 
-func runAVService(ctx context.Context, cfg *vmagent.Config) error {
+func runAVService(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
 	listenConnection, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%s", cfg.AvListenPort))
 	if err != nil {
 		return err
@@ -60,7 +60,7 @@ func runAVService(ctx context.Context, cfg *vmagent.Config) error {
 		return err
 	}
 
-	avService := av_service.NewAVService(sfuConnection, listenConnection)
+	avService := av_service.NewAVService(sfuConnection, listenConnection, logger)
 
 	go func() {
 		defer listenConnection.Close()
@@ -71,14 +71,14 @@ func runAVService(ctx context.Context, cfg *vmagent.Config) error {
 	return nil
 }
 
-func runControlService(ctx context.Context, cfg *vmagent.Config, ch chan<- *controlpb.InputMessage) error {
+func runControlService(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger, ch chan<- *controlpb.InputMessage) error {
 	gRPCConnection, err := grpc.NewClient(cfg.SFUgRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
 
 	client := controlpb.NewInputServiceClient(gRPCConnection)
-	controlService := control_service.NewControlService(client, ch)
+	controlService := control_service.NewControlService(client, ch, logger)
 
 	go func() {
 		defer gRPCConnection.Close()
@@ -87,10 +87,12 @@ func runControlService(ctx context.Context, cfg *vmagent.Config, ch chan<- *cont
 	return nil
 }
 
-func runInjectorService(ctx context.Context, ch <-chan *controlpb.InputMessage) error {
-	injectorService :=  injector.NewInjectorService(ch)
+func runInjectorService(ctx context.Context, logger *slog.Logger, ch <-chan *controlpb.InputMessage) error {
+	injectorService :=  injector.NewInjectorService(ch, logger)
 
-	go injectorService.StartReadingInput(ctx)
+	go func() {
+		injectorService.StartReadingInput(ctx)
+	}()
 	return nil
 }
 
@@ -98,25 +100,27 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
 	cfg, err := loadConfig()
 	if err != nil {
-		slog.Error("Error loading env variables", "err", err)
+		logger.Error("error loading env variables", slog.Any("err", err))
 		os.Exit(1)
 	}
 
-	if err := runAVService(ctx, cfg); err != nil {
-		slog.Error("error starting av service", "err", err)
+	if err := runAVService(ctx, cfg, logger); err != nil {
+		logger.Error("error starting av service", slog.Any("err", err))
 	}
 
 	ch := make(chan *controlpb.InputMessage, 1000)
 
-	if err := runControlService(ctx, cfg, ch); err != nil {
-		slog.Error("Error starting control service", "err", err)
+	if err := runControlService(ctx, cfg, logger, ch); err != nil {
+		logger.Error("error starting control service", slog.Any("err", err))
 		os.Exit(1)
 	}
 
-	if err := runInjectorService(ctx, ch); err != nil {
-		slog.Error("Error starting injector service", "err", err)
+	if err := runInjectorService(ctx, logger, ch); err != nil {
+		logger.Error("error starting injector service", slog.Any("err", err))
 		os.Exit(1)
 	}
 	
@@ -124,7 +128,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	<-stop
-	slog.Info("Shutting down...")
+	logger.Info("Shutting down...")
 	cancel()
 	time.Sleep(time.Second)
 }

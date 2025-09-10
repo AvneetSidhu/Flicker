@@ -16,14 +16,14 @@ type ControlService struct {
 	ch chan<- *controlpb.InputMessage
 }
 
-func NewControlService(client controlpb.InputServiceClient, inputForwardingChan chan <- *controlpb.InputMessage) *ControlService {
-	return &ControlService{client: client, ch: inputForwardingChan, logger: slog.Default().With("service", "control")}
+func NewControlService(client controlpb.InputServiceClient, inputForwardingChan chan <- *controlpb.InputMessage, logger *slog.Logger) *ControlService {
+	return &ControlService{client: client, ch: inputForwardingChan, logger: logger}
 }
 
 func (s *ControlService) StartControlStream(ctx context.Context) {
 	stream, err := s.client.StreamInputs(context.Background(), &emptypb.Empty{})
 	if err != nil {
-		s.logger.Error("error starting stream","err",err)
+		s.logger.Error("error initiating gRPC stream", slog.Any("error", err))
 		return 
 	}
 
@@ -38,10 +38,10 @@ func (s *ControlService) StartControlStream(ctx context.Context) {
 			msg, err := stream.Recv()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					s.logger.Info("stream ended by server:","err", err)
+					s.logger.Info("stream ended by server", slog.Any("info", err))
 					return
 				}
-				s.logger.Error("error receiving from stream in control service", "err", err)
+				s.logger.Error("error receiving from stream in control service", slog.Any("error", err))
 				continue
 			}
 			s.ch <- msg

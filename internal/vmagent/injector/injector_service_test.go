@@ -1,6 +1,7 @@
 package injector
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/AvneetSidhu/Flicker/api/controlpb"
@@ -9,7 +10,7 @@ import (
 func TestNewInjectorService(t *testing.T) {
 	ch := make(chan *controlpb.InputMessage, 1000)
 
-	injectorService := NewInjectorService(ch)
+	injectorService := NewInjectorService(ch, slog.Default().With("service", "av"))
 	if injectorService.logger == nil {
 		t.Error("expected injectorService to not nil")
 	} 
