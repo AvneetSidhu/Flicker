@@ -1,7 +1,6 @@
 package room
 
 import (
-	"context"
 	"log/slog"
 	"sync"
 
@@ -16,7 +15,7 @@ type RoomManager struct {
 	mu                   sync.RWMutex
 }
 
-func NewRoomManager(ctx context.Context, logger *slog.Logger) *RoomManager {
+func NewRoomManager(logger *slog.Logger) *RoomManager {
 	return &RoomManager{
 		rooms:                make(map[uint32]*Room),
 		logger:               logger,

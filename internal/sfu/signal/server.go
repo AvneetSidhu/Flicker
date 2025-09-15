@@ -1,4 +1,4 @@
-package signal
+package server
 
 import (
 	"context"
@@ -59,6 +59,8 @@ func (s *SignalServer) WsConnectHandler(ctx context.Context, w http.ResponseWrit
 		socketConn:  conn,
 		sendChan:    make(chan []byte, 256),
 		onClose:     s.cleanUp(),
+		api:         s.webrtcAPI,
+		logger:      s.logger,
 	}
 
 	s.sessions[username] = session

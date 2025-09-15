@@ -1,4 +1,4 @@
-package signal
+package server
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-func (s *session) addIceCandidateToPeerConnection(pc *webrtc.PeerConnection, candidate ICECandidatePayload) error {
+func (s *session) addIceCandidateToPeerConnection(candidate ICECandidatePayload) error {
 	if s.user == nil {
 		return nil
 	}

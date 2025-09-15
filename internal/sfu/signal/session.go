@@ -1,4 +1,4 @@
-package signal
+package server
 
 import (
 	"context"
@@ -36,9 +36,29 @@ func (s *session) readPump(ctx context.Context) {
 		default:
 			_, message, err := s.socketConn.ReadMessage()
 			if err != nil {
-				s.logger.Error("readPump: error reading message", slog.String("error", err.Error()), slog.String("user", s.displayName))
-				break
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+					s.logger.Info("readPump: connection closed normally",
+						slog.String("user", s.displayName))
+					return
+				}
+
+				if websocket.IsCloseError(err,
+					websocket.CloseGoingAway,
+					websocket.CloseAbnormalClosure,
+				) {
+					s.logger.Warn("readPump: connection closed unexpectedly",
+						slog.String("error", err.Error()),
+						slog.String("user", s.displayName))
+					return
+				}
+
+				s.logger.Error("readPump: error reading message",
+					slog.String("error", err.Error()),
+					slog.String("user", s.displayName))
+				return
+
 			}
+
 			wsMessage, err := parseWSMessage(message)
 			if err != nil {
 				s.logger.Error("readPump: error parsing ws message", slog.String("error", err.Error()), slog.String("user", s.displayName))
@@ -67,7 +87,7 @@ func (s *session) readPump(ctx context.Context) {
 					continue
 				}
 
-				iceCandidateAddErr := s.addIceCandidateToPeerConnection(s.user.PeerConn, *candidate)
+				iceCandidateAddErr := s.addIceCandidateToPeerConnection(*candidate)
 				if iceCandidateAddErr != nil {
 					s.logger.Error("readPump: error adding ice candidate", slog.String("error", iceCandidateAddErr.Error()), slog.String("user", s.displayName))
 					continue
@@ -90,36 +110,44 @@ func (s *session) writePump(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+
 		case message, ok := <-s.sendChan:
 			if !ok {
 				return
 			}
+
 			writeErr := s.socketConn.WriteMessage(websocket.TextMessage, message)
 			if writeErr != nil {
 				s.logger.Error("writePump: error writing message", slog.String("error", writeErr.Error()), slog.String("user", s.displayName))
 				return
 			}
+
 		default:
 			continue
+
 		}
 	}
 }
 
 func parseWSMessage(msg []byte) (*WSMessage, error) {
 	var decodedMsg WSMessage
+
 	err := json.Unmarshal(msg, &decodedMsg)
 	if err != nil {
 		return nil, err
 	}
+
 	return &decodedMsg, nil
 }
 
 func parseWSMessagePayload[T any](payload []byte) (*T, error) {
 	var out T
+
 	err := json.Unmarshal(payload, out)
 	if err != nil {
 		return nil, err
 	}
+
 	return &out, nil
 }
 

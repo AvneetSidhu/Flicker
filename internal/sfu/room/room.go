@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -73,26 +74,31 @@ func (r *Room) GetMember(userName string) *user.User {
 	return nil
 }
 
-func (r *Room) Broadcast() {
+func (r *Room) Broadcast(ctx context.Context) {
 	for {
-		pkt, ok := <-r.mediaChan
-		if !ok {
-			break
-		}
-		if pkt == nil {
-			continue
-		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			pkt, ok := <-r.mediaChan
+			if !ok {
+				break
+			}
+			if pkt == nil {
+				continue
+			}
 
-		for _, u := range r.membersSnapshot {
-			go func() {
-				pktCopy := *pkt
-				pktCopy.Payload = append([]byte(nil), pkt.Payload...)
+			for _, u := range r.membersSnapshot {
+				go func() {
+					pktCopy := *pkt
+					pktCopy.Payload = append([]byte(nil), pkt.Payload...)
 
-				err := demuxAndSend(&pktCopy, u)
-				if err != nil {
-					r.logger.Error("error sending packet", "err", err, "client", u.Name)
-				}
-			}()
+					err := demuxAndSend(&pktCopy, u)
+					if err != nil {
+						r.logger.Error("error sending packet", "err", err, "client", u.Name)
+					}
+				}()
+			}
 		}
 	}
 }
