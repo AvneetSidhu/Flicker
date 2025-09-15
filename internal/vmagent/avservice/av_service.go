@@ -9,7 +9,7 @@ import (
 )
 
 type AVService struct {
-	sfu net.Conn
+	sfu    net.Conn
 	listen net.PacketConn
 	logger *slog.Logger
 }

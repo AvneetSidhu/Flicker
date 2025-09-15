@@ -9,8 +9,9 @@ import (
 )
 
 type User struct {
-	Name       string
-	peerConn *webrtc.PeerConnection
+	Name string
+
+	PeerConn *webrtc.PeerConnection
 
 	VideoBuf chan *rtp.Packet
 	AudioBuf chan *rtp.Packet
@@ -18,12 +19,12 @@ type User struct {
 	audioTrack *webrtc.TrackLocalStaticRTP
 	videoTrack *webrtc.TrackLocalStaticRTP
 
-	dataChan *webrtc.DataChannel
+	DataChan *webrtc.DataChannel
 
-	VideoBytesSent uint32
+	VideoBytesSent  uint32
 	VideoPacketSent uint32
 
-	AudioBytesSent uint32
+	AudioBytesSent   uint32
 	AudioPacketsSent uint32
 
 	LatestAudioPacketTime uint32
@@ -32,41 +33,53 @@ type User struct {
 	AudioSSRC uint32
 	VideoSSRC uint32
 
-	roomID uint32
-
 	logger *slog.Logger
 }
 
-func (u *User) StartWriting(ctx context.Context){
+func NewUser(name string, pc *webrtc.PeerConnection, audioTrack, videoTrack *webrtc.TrackLocalStaticRTP, dataChan *webrtc.DataChannel, audioSSRC uint32, videoSSRC uint32, logger *slog.Logger) *User {
+	return &User{
+		Name:       name,
+		PeerConn:   pc,
+		audioTrack: audioTrack,
+		videoTrack: videoTrack,
+		AudioBuf:   make(chan *rtp.Packet, 1000),
+		VideoBuf:   make(chan *rtp.Packet, 1000),
+		DataChan:   dataChan,
+		logger:     logger,
+		AudioSSRC:  audioSSRC,
+		VideoSSRC:  videoSSRC,
+	}
+}
+
+func (u *User) StartWritingRTP(ctx context.Context) {
 	go func() {
 		for {
-			select{
+			select {
 			case <-ctx.Done():
-				u.logger.Info("ending video write loop", "user", u.Name)
+				return
 			case pkt := <-u.AudioBuf:
 				u.audioTrack.WriteRTP(pkt)
 			default:
 				continue
 			}
-	}
+		}
 	}()
 
 	go func() {
 		for {
-		select{
-		case <-ctx.Done():
-			u.logger.Info("ending audio write loop", "user", u.Name)
-		case pkt := <-u.VideoBuf:
-			u.videoTrack.WriteRTP(pkt)
-		default:
-			continue
+			select {
+			case <-ctx.Done():
+				return
+			case pkt := <-u.VideoBuf:
+				u.videoTrack.WriteRTP(pkt)
+			default:
+				continue
+			}
 		}
-	}
 	}()
 }
 
-
 func (u *User) CleanUpUser() {
-	u.dataChan.Close()
-	u.peerConn.Close()
+	u.DataChan.Close()
+	u.PeerConn.Close()
 }

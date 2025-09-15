@@ -10,7 +10,7 @@ import (
 
 type InjectorService struct {
 	inputChan <-chan *controlpb.InputMessage
-	logger *slog.Logger
+	logger    *slog.Logger
 }
 
 func NewInjectorService(ch <-chan *controlpb.InputMessage, logger *slog.Logger) *InjectorService {

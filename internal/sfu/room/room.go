@@ -11,23 +11,24 @@ import (
 
 const (
 	PayloadTypeOpus = 111
-	PayloadTypeVP8 = 96
+	PayloadTypeVP8  = 96
 )
 
 type Room struct {
 	logger *slog.Logger
 
-	RoomId uint32
-	membersSnapshot []*user.User
-	mediaChan <-chan *rtp.Packet
+	RoomId            uint32
+	membersSnapshot   []*user.User
+	mediaChan         <-chan *rtp.Packet
 	CurrentController string
-	mu sync.RWMutex
+	mu                sync.RWMutex
 }
-//use atomic.Value for members snapshot / create on write 
+
+// use atomic.Value for members snapshot / create on write
 func NewRoom(logger *slog.Logger, roomId uint32, mediaChan <-chan *rtp.Packet) *Room {
 	return &Room{
-		RoomId: roomId,
-		mediaChan: mediaChan,
+		RoomId:            roomId,
+		mediaChan:         mediaChan,
 		CurrentController: "",
 	}
 }
@@ -75,8 +76,12 @@ func (r *Room) GetMember(userName string) *user.User {
 func (r *Room) Broadcast() {
 	for {
 		pkt, ok := <-r.mediaChan
-		if !ok { break }
-		if pkt == nil { continue }
+		if !ok {
+			break
+		}
+		if pkt == nil {
+			continue
+		}
 
 		for _, u := range r.membersSnapshot {
 			go func() {
@@ -85,7 +90,7 @@ func (r *Room) Broadcast() {
 
 				err := demuxAndSend(&pktCopy, u)
 				if err != nil {
-					r.logger.Error("error sending packet","err", err, "client", u.Name)
+					r.logger.Error("error sending packet", "err", err, "client", u.Name)
 				}
 			}()
 		}
@@ -99,9 +104,11 @@ func demuxAndSend(pkt *rtp.Packet, user *user.User) error {
 	} else if pkt.PayloadType == PayloadTypeOpus {
 		err = sendWithRetry(pkt, user.AudioBuf)
 	}
+
 	if err != nil {
 		return fmt.Errorf("error sending packet (payloadType=%d): %w", pkt.PayloadType, err)
 	}
+
 	return nil
 }
 
@@ -110,9 +117,9 @@ func sendWithRetry(pkt *rtp.Packet, ch chan *rtp.Packet) error {
 	case ch <- pkt:
 		return nil
 	default:
-		<- ch
+		<-ch
 		select {
-		case ch <-pkt:
+		case ch <- pkt:
 			return nil
 		default:
 			return fmt.Errorf("writing failed: buffer full")

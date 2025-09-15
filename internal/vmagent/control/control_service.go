@@ -13,10 +13,10 @@ import (
 type ControlService struct {
 	client controlpb.InputServiceClient
 	logger *slog.Logger
-	ch chan<- *controlpb.InputMessage
+	ch     chan<- *controlpb.InputMessage
 }
 
-func NewControlService(client controlpb.InputServiceClient, inputForwardingChan chan <- *controlpb.InputMessage, logger *slog.Logger) *ControlService {
+func NewControlService(client controlpb.InputServiceClient, inputForwardingChan chan<- *controlpb.InputMessage, logger *slog.Logger) *ControlService {
 	return &ControlService{client: client, ch: inputForwardingChan, logger: logger}
 }
 
@@ -24,14 +24,14 @@ func (s *ControlService) StartControlStream(ctx context.Context) {
 	stream, err := s.client.StreamInputs(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		s.logger.Error("error initiating gRPC stream", slog.Any("error", err))
-		return 
+		return
 	}
 
-	defer close(s.ch)  
+	defer close(s.ch)
 
 	for {
 		select {
-		case <- ctx.Done():
+		case <-ctx.Done():
 			s.logger.Info("shutdown signal received: shutting down input stream in control service")
 			return
 		default:
