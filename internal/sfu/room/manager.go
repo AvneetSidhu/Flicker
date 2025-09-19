@@ -1,9 +1,11 @@
 package room
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 
+	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/pion/rtp"
 )
 
@@ -13,14 +15,17 @@ type RoomManager struct {
 	logger               *slog.Logger
 	roomsCreatedLifetime uint32
 	mu                   sync.RWMutex
+	ingestManager        *ingest.IngestManager
 }
 
 func NewRoomManager(logger *slog.Logger) *RoomManager {
+	ingestManager := ingest.NewIngestManager(logger)
 	return &RoomManager{
 		rooms:                make(map[uint32]*Room),
 		logger:               logger,
 		roomsCreatedLifetime: 0,
 		mu:                   sync.RWMutex{},
+		ingestManager:        ingestManager,
 	}
 }
 
@@ -31,7 +36,7 @@ func (rm *RoomManager) GetRoom(roomId uint32) (*Room, bool) {
 	return room, ok
 }
 
-func (rm *RoomManager) AddRoom(creator string, mediaChan chan *rtp.Packet) error {
+func (rm *RoomManager) AddRoom(ctx context.Context, creator string, mediaChan chan *rtp.Packet) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if len(rm.rooms) >= 10 {
@@ -39,7 +44,9 @@ func (rm *RoomManager) AddRoom(creator string, mediaChan chan *rtp.Packet) error
 	}
 	rm.logger.Info("Creating room", slog.Any("roomId", rm.roomsCreatedLifetime), slog.String("creator", creator))
 
+	rm.ingestManager.CreateIngestSession(ctx, rm.roomsCreatedLifetime, mediaChan)
 	room := NewRoom(rm.logger, rm.roomsCreatedLifetime, mediaChan)
+	room.Broadcast(ctx)
 
 	rm.roomsCreatedLifetime++
 
@@ -54,6 +61,9 @@ func (rm *RoomManager) RemoveRoom(roomId uint32) error {
 	if _, ok := rm.rooms[roomId]; !ok {
 		return nil
 	}
+
+	rm.ingestManager.RemoveSession(roomId)
+
 	delete(rm.rooms, roomId)
 	rm.logger.Info("Removed room", slog.Any("roomId", roomId))
 	return nil

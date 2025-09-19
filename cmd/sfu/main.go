@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/AvneetSidhu/Flicker/internal/sfu"
-	"github.com/AvneetSidhu/Flicker/internal/sfu/room"
 	server "github.com/AvneetSidhu/Flicker/internal/sfu/signal"
 	"github.com/joho/godotenv"
 	"github.com/pion/webrtc/v3"
@@ -24,9 +23,9 @@ func loadConfig() (*sfu.Config, error) {
 		return nil, fmt.Errorf("error loading .env, %v", err)
 	}
 	return &sfu.Config{
-		Port:      os.Getenv("PORT"),
-		Tailnet:   os.Getenv("TAILNET_IP"),
-		Log_Level: os.Getenv("LOG_LEVEL"),
+		Port:     os.Getenv("PORT"),
+		Tailnet:  os.Getenv("TAILNET_IP"),
+		LogLevel: os.Getenv("LOG_LEVEL"),
 	}, nil
 }
 
@@ -38,8 +37,7 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se))
 
-	roomManager := room.NewRoomManager(logger)
-	sfuServer := server.NewSignalServer(roomManager, logger, api)
+	sfuServer := server.NewSignalServer(logger, api)
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { sfuServer.WsConnectHandler(ctx, w, r) })
 	go func() error {
@@ -79,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logLevel := parsedLogLevel(cfg.Log_Level)
+	logLevel := parsedLogLevel(cfg.LogLevel)
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	logger.Debug("logger initialized")

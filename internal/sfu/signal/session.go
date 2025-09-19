@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/AvneetSidhu/Flicker/internal/sfu/room"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/user"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
@@ -21,6 +22,7 @@ type session struct {
 	onClose     func(clientID string)
 	user        *user.User
 	closeOnce   sync.Once
+	roomManager *room.RoomManager
 }
 
 func (s *session) readPump(ctx context.Context) {
@@ -36,27 +38,13 @@ func (s *session) readPump(ctx context.Context) {
 		default:
 			_, message, err := s.socketConn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-					s.logger.Info("readPump: connection closed normally",
-						slog.String("user", s.displayName))
-					return
+				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					s.logger.Error("readPump: unexpected close error", slog.String("error", err.Error()), slog.String("user", s.displayName))
+				} else {
+					s.logger.Error("readPump: error reading message", slog.String("error", err.Error()), slog.String("user", s.displayName))
 				}
 
-				if websocket.IsCloseError(err,
-					websocket.CloseGoingAway,
-					websocket.CloseAbnormalClosure,
-				) {
-					s.logger.Warn("readPump: connection closed unexpectedly",
-						slog.String("error", err.Error()),
-						slog.String("user", s.displayName))
-					return
-				}
-
-				s.logger.Error("readPump: error reading message",
-					slog.String("error", err.Error()),
-					slog.String("user", s.displayName))
 				return
-
 			}
 
 			wsMessage, err := parseWSMessage(message)
@@ -73,12 +61,11 @@ func (s *session) readPump(ctx context.Context) {
 					continue
 				}
 
-				peer, createPeerErr := s.createPeerConnection(*offer)
+				createPeerErr := s.createPeerConnection(*offer)
 				if createPeerErr != nil {
 					s.logger.Error("readPump: error creating peer connection", slog.String("error", createPeerErr.Error()), slog.String("user", s.displayName))
 					continue
 				}
-				s.user = peer
 
 			case "ice-candidate":
 				candidate, parseCandidateErr := parseWSMessagePayload[ICECandidatePayload](wsMessage.Payload)
@@ -87,12 +74,13 @@ func (s *session) readPump(ctx context.Context) {
 					continue
 				}
 
+				// s.logger.Debug("Received ICE candidate", slog.String("candidate", candidate.Candidate), slog.String("user", s.displayName))
 				iceCandidateAddErr := s.addIceCandidateToPeerConnection(*candidate)
 				if iceCandidateAddErr != nil {
 					s.logger.Error("readPump: error adding ice candidate", slog.String("error", iceCandidateAddErr.Error()), slog.String("user", s.displayName))
 					continue
 				}
-
+				// s.logger.Debug("Added ICE candidate", slog.String("candidate", candidate.Candidate), slog.String("user", s.displayName))
 			default:
 				s.logger.Error("readPump: unknown message type", slog.String("type", wsMessage.Type), slog.String("user", s.displayName))
 				continue
@@ -105,7 +93,7 @@ func (s *session) writePump(ctx context.Context) {
 	defer func() {
 		s.socketConn.Close()
 	}()
-
+	s.logger.Info("writePump: started", slog.String("user", s.displayName))
 	for {
 		select {
 		case <-ctx.Done():
@@ -115,7 +103,7 @@ func (s *session) writePump(ctx context.Context) {
 			if !ok {
 				return
 			}
-
+			s.logger.Debug("writePump: sending message", slog.Int("length", len(message)), slog.String("user", s.displayName), slog.String("msg", string(message)))
 			writeErr := s.socketConn.WriteMessage(websocket.TextMessage, message)
 			if writeErr != nil {
 				s.logger.Error("writePump: error writing message", slog.String("error", writeErr.Error()), slog.String("user", s.displayName))
@@ -124,30 +112,25 @@ func (s *session) writePump(ctx context.Context) {
 
 		default:
 			continue
-
 		}
 	}
 }
 
 func parseWSMessage(msg []byte) (*WSMessage, error) {
 	var decodedMsg WSMessage
-
 	err := json.Unmarshal(msg, &decodedMsg)
 	if err != nil {
 		return nil, err
 	}
-
 	return &decodedMsg, nil
 }
 
 func parseWSMessagePayload[T any](payload []byte) (*T, error) {
 	var out T
-
-	err := json.Unmarshal(payload, out)
+	err := json.Unmarshal(payload, &out)
 	if err != nil {
 		return nil, err
 	}
-
 	return &out, nil
 }
 
@@ -155,6 +138,15 @@ func (s *session) CleanUpSession() {
 	s.closeOnce.Do(func() {
 		if s.onClose != nil {
 			s.onClose(s.displayName)
+		}
+
+		if s.roomId != 0 && s.user != nil {
+			room, _ := s.roomManager.GetRoom(s.roomId)
+			removedMember := room.RemoveMember(s.user)
+
+			if !removedMember {
+				s.logger.Warn("Could not remove member from room", slog.String("clientID", s.displayName), slog.Any("roomId", s.roomId))
+			}
 		}
 
 		s.socketConn.Close()

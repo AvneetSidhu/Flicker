@@ -20,7 +20,8 @@ type SignalServer struct {
 	mu          sync.RWMutex
 }
 
-func NewSignalServer(roomManager *room.RoomManager, logger *slog.Logger, webrtcAPI *webrtc.API) *SignalServer {
+func NewSignalServer(logger *slog.Logger, webrtcAPI *webrtc.API) *SignalServer {
+	roomManager := room.NewRoomManager(logger)
 	return &SignalServer{
 		roomManager: roomManager,
 		logger:      logger,
@@ -42,6 +43,7 @@ func (s *SignalServer) WsConnectHandler(ctx context.Context, w http.ResponseWrit
 	}
 
 	username := r.URL.Query().Get("username")
+	s.logger.Info("New WebSocket connection", slog.String("username", username))
 
 	if username == "" {
 		http.Error(w, "username is required", http.StatusBadRequest)
@@ -61,12 +63,13 @@ func (s *SignalServer) WsConnectHandler(ctx context.Context, w http.ResponseWrit
 		onClose:     s.cleanUp(),
 		api:         s.webrtcAPI,
 		logger:      s.logger,
+		roomManager: s.roomManager,
 	}
 
 	s.sessions[username] = session
 
-	go session.readPump(ctx)
 	go session.writePump(ctx)
+	go session.readPump(ctx)
 }
 
 func (s *SignalServer) cleanUp() func(clientID string) {
@@ -79,13 +82,6 @@ func (s *SignalServer) cleanUp() func(clientID string) {
 
 		if !ok || session.user == nil {
 			return
-		}
-
-		room, _ := s.roomManager.GetRoom(session.roomId)
-		removedMember := room.RemoveMember(session.user)
-
-		if !removedMember {
-			s.logger.Warn("Could not remove member from room", slog.String("clientID", clientID), slog.Any("roomId", session.roomId))
 		}
 
 		delete(s.sessions, clientID)
