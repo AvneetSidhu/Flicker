@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,10 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/AvneetSidhu/Flicker/api/controlpb"
 	"github.com/AvneetSidhu/Flicker/internal/sfu"
-	server "github.com/AvneetSidhu/Flicker/internal/sfu/signal"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/room"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/server"
 	"github.com/joho/godotenv"
 	"github.com/pion/webrtc/v3"
+	"google.golang.org/grpc"
 )
 
 func loadConfig() (*sfu.Config, error) {
@@ -22,14 +28,63 @@ func loadConfig() (*sfu.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error loading .env, %v", err)
 	}
+
+	wsPort := os.Getenv("PORT")
+	if wsPort == "" {
+		return nil, fmt.Errorf("missing PORT")
+	}
+
+	tailnet := os.Getenv("TAILNET_IP")
+	if tailnet == "" {
+		return nil, fmt.Errorf("missing TAILNET_IP")
+	}
+
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		return nil, fmt.Errorf("missing LOG_LEVEL")
+	}
+
+	grpcPort := os.Getenv("SFU_GRPC_PORT")
+	if grpcPort == "" {
+		return nil, fmt.Errorf("missing SFU_GRPC_PORT")
+	}
+
+	ingestPort := os.Getenv("INGEST_PORT")
+	if ingestPort == "" {
+		return nil, fmt.Errorf("missing INGEST_PORT")
+	}
+
 	return &sfu.Config{
-		Port:     os.Getenv("PORT"),
-		Tailnet:  os.Getenv("TAILNET_IP"),
-		LogLevel: os.Getenv("LOG_LEVEL"),
+		Port:          wsPort,
+		Tailnet:       tailnet,
+		LogLevel:      logLevel,
+		GRPCPort:      grpcPort,
+		IngestionPort: ingestPort,
 	}, nil
 }
 
-func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Logger) error {
+func startGRPCServer(ctx context.Context, cfg *sfu.Config, logger *slog.Logger, controlMessageEventBus <-chan *control.CommandEvent) error {
+	server := control.NewGRPCServer(logger, cfg.GRPCPort, controlMessageEventBus)
+	grpcServer := grpc.NewServer()
+
+	controlpb.RegisterInputServiceServer(grpcServer, server)
+
+	go server.Start(ctx)
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", cfg.GRPCPort))
+	if err != nil {
+		logger.Error("failed to listen: %v", err)
+		return err
+	}
+
+	go func() error {
+		grpcServer.Serve(lis)
+		return nil
+	}()
+	return nil
+}
+
+func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Logger, roomManager *room.RoomManager) error {
 	me := &webrtc.MediaEngine{}
 	me.RegisterDefaultCodecs()
 	se := webrtc.SettingEngine{}
@@ -37,12 +92,15 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se))
 
-	sfuServer := server.NewSignalServer(logger, api)
+	sfuServer := server.NewSignalServer(logger, api, roomManager)
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { sfuServer.WsConnectHandler(ctx, w, r) })
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { sfuServer.WsConnectHandler(ctx, w, r, api) })
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	go func() error {
 		err := http.ListenAndServe(fmt.Sprintf(":%s", cfg.Port), nil)
 		if err != nil {
+			logger.Error("error starting server", "err", err)
+			os.Exit(1)
 			return err
 		}
 		return nil
@@ -82,7 +140,18 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	logger.Debug("logger initialized")
 
-	if err := startWebSocketServer(ctx, cfg, logger); err != nil {
+	controlMessageEventBus := make(chan *control.CommandEvent, 5000)
+
+	if err := startGRPCServer(ctx, cfg, logger, controlMessageEventBus); err != nil {
+		logger.Error("error starting grpc server", "err", err)
+		os.Exit(1)
+	}
+
+	ingestService := ingest.NewIngestManager(logger, cfg.IngestionPort)
+
+	roomManager := room.NewRoomManager(logger, controlMessageEventBus, ingestService)
+
+	if err := startWebSocketServer(ctx, cfg, logger, roomManager); err != nil {
 		slog.Error("error starting web socket server", "err", err)
 		os.Exit(1)
 	}
@@ -94,5 +163,4 @@ func main() {
 	logger.Info("shutting down...")
 	cancel()
 	time.Sleep(time.Second)
-
 }

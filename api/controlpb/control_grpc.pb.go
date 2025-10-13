@@ -20,7 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InputService_StreamInputs_FullMethodName = "/helloworld.InputService/StreamInputs"
+	InputService_StreamInputs_FullMethodName = "/control.InputService/StreamInputs"
 )
 
 // InputServiceClient is the client API for InputService service.
@@ -111,7 +111,7 @@ type InputService_StreamInputsServer = grpc.ServerStreamingServer[InputMessage]
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var InputService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "helloworld.InputService",
+	ServiceName: "control.InputService",
 	HandlerType: (*InputServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

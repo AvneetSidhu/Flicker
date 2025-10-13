@@ -3,53 +3,58 @@ package ingest
 import (
 	"context"
 	"log/slog"
+	"net"
 	"sync"
 
 	"github.com/pion/rtp"
 )
 
+type Room interface {
+	Broadcast(pkt *rtp.Packet, bufferType string)
+}
+
 type IngestManager struct {
-	basePort  int
-	vmCount   int
-	ingestMap map[uint32]*ingestSession
-	logger    *slog.Logger
-	mu        sync.RWMutex
+	rooms   sync.Map
+	logger  *slog.Logger
+	port    string
+	bufPool sync.Pool
+	listen  net.PacketConn
 }
 
-func NewIngestManager(logger *slog.Logger) *IngestManager {
+func NewIngestManager(logger *slog.Logger, port string) *IngestManager {
 	return &IngestManager{
-		basePort:  50000,
-		vmCount:   0,
-		ingestMap: make(map[uint32]*ingestSession),
-		logger:    logger,
-		mu:        sync.RWMutex{},
+		rooms:   sync.Map{},
+		logger:  logger,
+		port:    port,
+		bufPool: sync.Pool{New: func() interface{} { return make([]byte, 1500) }},
 	}
 }
 
-func (i *IngestManager) CreateIngestSession(ctx context.Context, roomID uint32, forwardChan chan<- *rtp.Packet) {
-	session := NewIngestSession(
-		i.logger,
-		i.basePort,
-		roomID,
-		forwardChan,
-	)
-	i.addSession(session)
-	session.StartIngest(ctx)
-}
-
-func (i *IngestManager) addSession(session *ingestSession) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.ingestMap[uint32(session.roomID)] = session
-}
-
-func (i *IngestManager) RemoveSession(roomID uint32) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	session, ok := i.ingestMap[uint32(roomID)]
-	if !ok {
-		i.logger.Debug("could not get session", "roomID", roomID)
+func (i *IngestManager) AddRoom(roomID string, audioPort int, videoPort int, room Room, ctx context.Context) {
+	ingestWorker := &ingestWorker{
+		audioPort: 50005,
+		videoPort: 50007,
+		room:      room,
+		bufPool:   &i.bufPool,
+		logger:    i.logger,
+		roomID:    roomID,
 	}
-	session.cleanUp()
-	delete(i.ingestMap, uint32(roomID))
+
+	go ingestWorker.StartIngest(ctx)
+	i.rooms.Store(roomID, ingestWorker)
+}
+
+func (i *IngestManager) RemoveRoom(roomID string) {
+	if val, ok := i.rooms.LoadAndDelete(roomID); ok {
+		close(val.(chan *PooledPacket))
+	}
+}
+
+func (i *IngestManager) Shutdown() {
+	i.logger.Info("ingest service shutting down")
+	i.listen.Close()
+	i.rooms.Range(func(key, value any) bool {
+		value.(*ingestWorker).Shutdown()
+		return true
+	})
 }

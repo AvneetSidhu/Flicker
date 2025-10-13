@@ -36,7 +36,7 @@ func TestNewAVService(t *testing.T) {
 	sfuConn := &mockConn{}
 	listenConn := &mockConn{}
 
-	s := NewAVService(sfuConn, listenConn, slog.Default().With("service", "av"))
+	s := NewAVService(sfuConn, listenConn, slog.Default().With("service", "av"), "hello")
 
 	if s.sfu == nil {
 		t.Error("expected sfu connection to be set")

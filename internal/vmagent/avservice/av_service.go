@@ -6,16 +6,19 @@ import (
 	"log/slog"
 	"net"
 	"time"
+
+	"github.com/pion/rtp"
 )
 
 type AVService struct {
 	sfu    net.Conn
 	listen net.PacketConn
 	logger *slog.Logger
+	roomID []byte
 }
 
-func NewAVService(sfuConnection net.Conn, listenConnection net.PacketConn, logger *slog.Logger) *AVService {
-	return &AVService{sfu: sfuConnection, listen: listenConnection, logger: logger}
+func NewAVService(sfuConnection net.Conn, listenConnection net.PacketConn, logger *slog.Logger, roomID string) *AVService {
+	return &AVService{sfu: sfuConnection, listen: listenConnection, logger: logger, roomID: []byte(roomID)}
 }
 
 func (s *AVService) StartIngest(ctx context.Context) {
@@ -35,7 +38,12 @@ func (s *AVService) StartIngest(ctx context.Context) {
 				continue
 			}
 
-			err = s.forward(buf[:n])
+			taggedPacket, err := addHeaderExtension(buf[:n], s.roomID)
+			if err != nil {
+				s.logger.Error("error tagging RTP", "err", err)
+			}
+
+			err = s.forward(taggedPacket)
 			if err != nil {
 				s.logger.Error("error forwarding RTP", slog.Any("error", err))
 			}
@@ -49,7 +57,23 @@ func (s *AVService) forward(packet []byte) error {
 	}
 
 	if _, err := s.sfu.Write(packet); err != nil {
-		return fmt.Errorf("error forwarding RTP packet of size %d", len(packet))
+		return err
 	}
 	return nil
+}
+
+func addHeaderExtension(packet []byte, roomID []byte) ([]byte, error) {
+	var rtpPacket rtp.Packet
+	if err := rtpPacket.Unmarshal(packet); err != nil {
+		return nil, fmt.Errorf("failed to parse RTP packet %w", err)
+	}
+
+	rtpPacket.Header.SetExtension(1, roomID)
+
+	raw, err := rtpPacket.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal RTP packet on re-mashal: %w", err)
+	}
+
+	return raw, nil
 }

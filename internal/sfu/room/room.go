@@ -1,12 +1,12 @@
 package room
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
-	"sync"
+	"sync/atomic"
 
-	"github.com/AvneetSidhu/Flicker/internal/sfu/user"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/session"
 	"github.com/pion/rtp"
 )
 
@@ -15,58 +15,61 @@ const (
 	PayloadTypeVP8  = 96
 )
 
+// type PooledPacket interface {
+// 	Acquire()
+// 	Release()
+// 	AcquireBulk(n int)
+// }
+
 type Room struct {
 	logger *slog.Logger
 
-	RoomId            uint32
-	membersSnapshot   []*user.User
-	mediaChan         <-chan *rtp.Packet
+	RoomID            string
+	membersSnapshot   atomic.Value
 	CurrentController string
-	mu                sync.RWMutex
+	inputForward      chan<- *control.CommandEvent
 }
 
 // use atomic.Value for members snapshot / create on write
-func NewRoom(logger *slog.Logger, roomId uint32, mediaChan <-chan *rtp.Packet) *Room {
-	return &Room{
-		RoomId:            roomId,
-		mediaChan:         mediaChan,
+func NewRoom(logger *slog.Logger, roomID string, inputForward chan<- *control.CommandEvent) *Room {
+	r := &Room{
+		RoomID:            roomID,
 		CurrentController: "",
+		inputForward:      inputForward,
+		logger:            logger,
 	}
+
+	r.membersSnapshot.Store([]*session.Session{})
+	return r
 }
 
-func (r *Room) AddMember(user *user.User) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.membersSnapshot = append(r.membersSnapshot, user)
+func (r *Room) AddMember(user *session.Session) bool {
+	oldList := r.membersSnapshot.Load().([]*session.Session)
+	newList := append([]*session.Session{}, oldList...)
+	newList = append(newList, user)
+	r.membersSnapshot.Store(newList)
+	return true
 }
 
-func (r *Room) RemoveMember(user *user.User) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for idx, mem := range r.membersSnapshot {
-		if mem == user {
-			if mem.Name == r.CurrentController {
-				r.CurrentController = ""
-			}
+func (r *Room) RemoveMember(user *session.Session) bool {
+	old := r.membersSnapshot.Load().([]*session.Session)
+	newList := make([]*session.Session, 0, len(old)-1)
 
-			if idx != len(r.membersSnapshot)-1 {
-				lastUser := r.membersSnapshot[len(r.membersSnapshot)-1]
-				r.membersSnapshot[idx] = lastUser
-			}
-
-			r.membersSnapshot = r.membersSnapshot[:len(r.membersSnapshot)-1]
-			return true
+	for _, mem := range old {
+		if mem != user {
+			newList = append(newList, mem)
 		}
 	}
-	return false
+
+	r.membersSnapshot.Store(newList)
+	return true
 }
 
-func (r *Room) GetMember(userName string) *user.User {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+func (r *Room) GetMember(userName string) *session.Session {
+	oldList := r.membersSnapshot.Load().([]*session.Session)
 
-	for _, mem := range r.membersSnapshot {
-		if mem.Name == userName {
+	for _, mem := range oldList {
+		if mem.DisplayName == userName {
 			return mem
 		}
 	}
@@ -74,48 +77,41 @@ func (r *Room) GetMember(userName string) *user.User {
 	return nil
 }
 
-func (r *Room) Broadcast(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			pkt, ok := <-r.mediaChan
-			if !ok {
-				break
-			}
-			if pkt == nil {
-				continue
-			}
+func (r *Room) Broadcast(pkt *rtp.Packet, bufferType string) {
 
-			for _, u := range r.membersSnapshot {
-				go func() {
-					pktCopy := *pkt
-					pktCopy.Payload = append([]byte(nil), pkt.Payload...)
+	// pkt.Acquire()
 
-					err := demuxAndSend(&pktCopy, u)
-					if err != nil {
-						r.logger.Error("error sending packet", "err", err, "client", u.Name)
-					}
-				}()
+	snapshot := r.membersSnapshot.Load().([]*session.Session)
+	activeUsers := int32(0)
+
+	for _, u := range snapshot {
+		if !u.IsActive() {
+			continue
+		}
+		activeUsers++
+	}
+
+	// if activeUsers == 0 {
+	// 	pkt.Release()
+	// 	return
+	// }
+
+	// pkt.AcquireBulk(activeUsers - 1)
+	for _, u := range snapshot {
+		if !u.IsActive() {
+			continue
+		}
+		if bufferType == "audio" {
+			if err := sendWithRetry(pkt, u.AudioBuf); err != nil {
+				// pkt.Release()
+			}
+		} else {
+			if err := sendWithRetry(pkt, u.VideoBuf); err != nil {
+				// pkt.Release()
 			}
 		}
 	}
-}
 
-func demuxAndSend(pkt *rtp.Packet, user *user.User) error {
-	var err error = nil
-	if pkt.PayloadType == PayloadTypeVP8 {
-		err = sendWithRetry(pkt, user.VideoBuf)
-	} else if pkt.PayloadType == PayloadTypeOpus {
-		err = sendWithRetry(pkt, user.AudioBuf)
-	}
-
-	if err != nil {
-		return fmt.Errorf("error sending packet (payloadType=%d): %w", pkt.PayloadType, err)
-	}
-
-	return nil
 }
 
 func sendWithRetry(pkt *rtp.Packet, ch chan *rtp.Packet) error {

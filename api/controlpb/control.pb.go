@@ -194,6 +194,7 @@ type InputMessage struct {
 	//	*InputMessage_Mouse
 	//	*InputMessage_Scroll
 	Payload       isInputMessage_Payload `protobuf_oneof:"payload"`
+	RoomID        string                 `protobuf:"bytes,4,opt,name=roomID,proto3" json:"roomID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -262,6 +263,13 @@ func (x *InputMessage) GetScroll() *ScrollInput {
 	return nil
 }
 
+func (x *InputMessage) GetRoomID() string {
+	if x != nil {
+		return x.RoomID
+	}
+	return ""
+}
+
 type isInputMessage_Payload interface {
 	isInputMessage_Payload()
 }
@@ -288,8 +296,7 @@ var File_api_control_proto protoreflect.FileDescriptor
 
 const file_api_control_proto_rawDesc = "" +
 	"\n" +
-	"\x11api/control.proto\x12\n" +
-	"helloworld\x1a\x1bgoogle/protobuf/empty.proto\"9\n" +
+	"\x11api/control.proto\x12\acontrol\x1a\x1bgoogle/protobuf/empty.proto\"9\n" +
 	"\rKeyboardInput\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\"\\\n" +
@@ -300,14 +307,15 @@ const file_api_control_proto_rawDesc = "" +
 	"\x06action\x18\x03 \x01(\tR\x06action\x12\x1a\n" +
 	"\bdragging\x18\x04 \x01(\bR\bdragging\"+\n" +
 	"\vScrollInput\x12\x1c\n" +
-	"\tdirection\x18\x01 \x01(\tR\tdirection\"\xb5\x01\n" +
-	"\fInputMessage\x127\n" +
-	"\bkeyboard\x18\x01 \x01(\v2\x19.helloworld.KeyboardInputH\x00R\bkeyboard\x12.\n" +
-	"\x05mouse\x18\x02 \x01(\v2\x16.helloworld.MouseInputH\x00R\x05mouse\x121\n" +
-	"\x06scroll\x18\x03 \x01(\v2\x17.helloworld.ScrollInputH\x00R\x06scrollB\t\n" +
-	"\apayload2R\n" +
-	"\fInputService\x12B\n" +
-	"\fStreamInputs\x12\x16.google.protobuf.Empty\x1a\x18.helloworld.InputMessage0\x01B\x0fZ\rapi/controlpbb\x06proto3"
+	"\tdirection\x18\x01 \x01(\tR\tdirection\"\xc4\x01\n" +
+	"\fInputMessage\x124\n" +
+	"\bkeyboard\x18\x01 \x01(\v2\x16.control.KeyboardInputH\x00R\bkeyboard\x12+\n" +
+	"\x05mouse\x18\x02 \x01(\v2\x13.control.MouseInputH\x00R\x05mouse\x12.\n" +
+	"\x06scroll\x18\x03 \x01(\v2\x14.control.ScrollInputH\x00R\x06scroll\x12\x16\n" +
+	"\x06roomID\x18\x04 \x01(\tR\x06roomIDB\t\n" +
+	"\apayload2O\n" +
+	"\fInputService\x12?\n" +
+	"\fStreamInputs\x12\x16.google.protobuf.Empty\x1a\x15.control.InputMessage0\x01B\x0fZ\rapi/controlpbb\x06proto3"
 
 var (
 	file_api_control_proto_rawDescOnce sync.Once
@@ -323,18 +331,18 @@ func file_api_control_proto_rawDescGZIP() []byte {
 
 var file_api_control_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_api_control_proto_goTypes = []any{
-	(*KeyboardInput)(nil), // 0: helloworld.KeyboardInput
-	(*MouseInput)(nil),    // 1: helloworld.MouseInput
-	(*ScrollInput)(nil),   // 2: helloworld.ScrollInput
-	(*InputMessage)(nil),  // 3: helloworld.InputMessage
+	(*KeyboardInput)(nil), // 0: control.KeyboardInput
+	(*MouseInput)(nil),    // 1: control.MouseInput
+	(*ScrollInput)(nil),   // 2: control.ScrollInput
+	(*InputMessage)(nil),  // 3: control.InputMessage
 	(*emptypb.Empty)(nil), // 4: google.protobuf.Empty
 }
 var file_api_control_proto_depIdxs = []int32{
-	0, // 0: helloworld.InputMessage.keyboard:type_name -> helloworld.KeyboardInput
-	1, // 1: helloworld.InputMessage.mouse:type_name -> helloworld.MouseInput
-	2, // 2: helloworld.InputMessage.scroll:type_name -> helloworld.ScrollInput
-	4, // 3: helloworld.InputService.StreamInputs:input_type -> google.protobuf.Empty
-	3, // 4: helloworld.InputService.StreamInputs:output_type -> helloworld.InputMessage
+	0, // 0: control.InputMessage.keyboard:type_name -> control.KeyboardInput
+	1, // 1: control.InputMessage.mouse:type_name -> control.MouseInput
+	2, // 2: control.InputMessage.scroll:type_name -> control.ScrollInput
+	4, // 3: control.InputService.StreamInputs:input_type -> google.protobuf.Empty
+	3, // 4: control.InputService.StreamInputs:output_type -> control.InputMessage
 	4, // [4:5] is the sub-list for method output_type
 	3, // [3:4] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name

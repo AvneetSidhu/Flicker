@@ -1,4 +1,4 @@
-package server
+package session
 
 import "encoding/json"
 
@@ -9,7 +9,7 @@ type WSMessage struct {
 }
 
 type JoinRoomPayload struct {
-	RoomID uint32 `json:"roomId"`
+	RoomID string `json:"roomId"`
 }
 
 type WebRTCOfferPayload struct {
