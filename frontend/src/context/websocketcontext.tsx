@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type WebSocketContextType = {
   socket: WebSocket | null;
@@ -10,18 +18,25 @@ type WebSocketContextType = {
   send: (data: string | ArrayBufferLike | Blob | ArrayBufferView) => boolean;
 };
 
-const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined);
+const WebSocketContext = createContext<WebSocketContextType | undefined>(
+  undefined
+);
 
 function buildWSUrl(displayName: string, userId: string): string {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const host = window.location.hostname;
-  const port = (import.meta as any).env?.VITE_WS_PORT || "50000";
-  const base = `${protocol}://${host}${port ? `:${port}` : ""}`;
-  const params = new URLSearchParams({ displayname: displayName, userid: userId });
-  return `${base}/ws?${params.toString()}`;
+  const host = window.location.host; // host includes hostname *and* port automatically
+  const params = new URLSearchParams({
+    displayname: displayName,
+    userid: userId,
+  });
+  return `${protocol}://${host}/ws?${params.toString()}`;
 }
 
-export const WebSocketProvider = ({ children }: { children: React.ReactNode }) => {
+export const WebSocketProvider = ({
+  children,
+}: {
+  children: React.ReactNode;
+}) => {
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -48,7 +63,9 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
       let userId = localStorage.getItem("userId");
       if (!userId) {
         try {
-          userId = (crypto as any).randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+          userId = (crypto as any).randomUUID
+            ? crypto.randomUUID()
+            : Math.random().toString(36).slice(2);
         } catch {
           userId = Math.random().toString(36).slice(2);
         }
@@ -60,7 +77,9 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
       try {
         // Close any previous socket before creating a new one
         if (socket) {
-          try { socket.close(); } catch {}
+          try {
+            socket.close();
+          } catch {}
         }
 
         const ws = new WebSocket(url);
@@ -103,16 +122,30 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     return () => {
       // Cleanup on unmount
-      try { socket?.close(); } catch {}
+      try {
+        socket?.close();
+      } catch {}
     };
   }, [socket]);
 
   const value = useMemo(
-    () => ({ socket, isConnected, isConnecting, error, connect, disconnect, send }),
+    () => ({
+      socket,
+      isConnected,
+      isConnecting,
+      error,
+      connect,
+      disconnect,
+      send,
+    }),
     [socket, isConnected, isConnecting, error, connect, disconnect, send]
   );
 
-  return <WebSocketContext.Provider value={value}>{children}</WebSocketContext.Provider>;
+  return (
+    <WebSocketContext.Provider value={value}>
+      {children}
+    </WebSocketContext.Provider>
+  );
 };
 
 export const useWebSocket = () => {
