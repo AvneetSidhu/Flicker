@@ -1,6 +1,4 @@
 *.env
-go.mod
 *.exe
-go.sum
 app.exe
 app
