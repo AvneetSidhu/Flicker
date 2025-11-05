@@ -11,45 +11,37 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        with:
-          path: source
-
-      - name: Clean Workspace
-        run: |
-          rm -rf /home/deploy/source
 
       # Build Backend (Go SFU)
       - name: Build Backend
-        working-directory: source
         run: |
           go mod tidy
           go build -o backend-binary ./cmd/sfu
 
       # Build Frontend (Vite)
       - name: Build Frontend
-        working-directory: source/frontend
+        working-directory: frontend
         run: |
           npm install
           npm run build
 
       # Stop Backend Before Deploying
       - name: Stop Backend Service
-        run: |
-          sudo systemctl stop myapp || true
+        run: sudo systemctl stop myapp || true
 
       # Deploy Backend Binary
       - name: Deploy Backend
         run: |
-          cp /home/deploy/source/backend-binary /home/deploy/app/backend/backend-binary
+          cp backend-binary /home/deploy/app/backend/backend-binary
           chmod +x /home/deploy/app/backend/backend-binary
 
       # Deploy Frontend Files
       - name: Deploy Frontend
         run: |
           rm -rf /home/deploy/app/frontend/*
-          cp -r /home/deploy/source/frontend/dist/* /home/deploy/app/frontend/
+          cp -r frontend/dist/* /home/deploy/app/frontend/
 
-      # Fix Permissions for Nginx
+      # Fix Permissions for Nginx to Serve Frontend
       - name: Fix Frontend Permissions
         run: |
           sudo chown -R deploy:www-data /home/deploy/app/frontend
@@ -58,5 +50,4 @@ jobs:
 
       # Restart Backend Service
       - name: Start Backend Service
-        run: |
-          sudo systemctl start myapp
+        run: sudo systemctl start myapp
