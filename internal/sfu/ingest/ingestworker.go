@@ -89,16 +89,6 @@ func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType 
 				// 	Time:   pkt.Timestamp,
 				// }
 
-				if packetType == "audio" {
-					fmt.Printf("PT=%d Seq=%d TS=%d SSRC=%d Marker=%v\n",
-						pkt.PayloadType,
-						pkt.SequenceNumber,
-						pkt.Timestamp,
-						pkt.SSRC,
-						pkt.Marker)
-
-				}
-
 				w.room.Broadcast(pkt, packetType)
 			}
 		}

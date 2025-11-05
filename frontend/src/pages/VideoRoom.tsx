@@ -1,0 +1,200 @@
+import { useEffect, useState, useRef } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { ArrowLeft, Volume2, VolumeX, Maximize, Users } from "lucide-react";
+
+interface Watcher {
+  id: string;
+  name: string;
+  joinedAt: Date;
+}
+
+const mockWatchers: Watcher[] = [
+  { id: "1", name: "Alice", joinedAt: new Date(Date.now() - 300000) },
+  { id: "2", name: "Bob", joinedAt: new Date(Date.now() - 180000) },
+  { id: "3", name: "Charlie", joinedAt: new Date(Date.now() - 120000) },
+  { id: "4", name: "Diana", joinedAt: new Date(Date.now() - 60000) },
+  { id: "5", name: "Eve", joinedAt: new Date(Date.now() - 30000) },
+];
+
+const VideoRoom = () => {
+  const navigate = useNavigate();
+  const { roomId } = useParams();
+  const [displayName, setDisplayName] = useState("");
+  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState([75]);
+  const [watchers, setWatchers] = useState<Watcher[]>(mockWatchers);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const name = localStorage.getItem("displayName");
+    if (!name) {
+      navigate("/");
+      return;
+    }
+    setDisplayName(name);
+    
+    // Add current user to watchers
+    setWatchers(prev => [...prev, {
+      id: "current",
+      name: name,
+      joinedAt: new Date()
+    }]);
+  }, [navigate]);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = volume[0] / 100;
+    }
+  }, [volume]);
+
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (videoRef.current) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        videoRef.current.requestFullscreen();
+      }
+    }
+  };
+
+  const handleBack = () => {
+    navigate("/rooms");
+  };
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      {/* Header */}
+      <header className="border-b border-border backdrop-blur-xl bg-background/80 z-50">
+        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleBack}
+            className="border-border hover:bg-secondary"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Rooms
+          </Button>
+          
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Users className="w-4 h-4" />
+            <span>{watchers.length} watching</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Video Section */}
+        <div className="flex-1 flex flex-col p-6 gap-4">
+          <div className="flex-1 relative rounded-2xl overflow-hidden bg-black shadow-card">
+            <video
+              ref={videoRef}
+              className="w-full h-full object-contain"
+              src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+              autoPlay
+              loop
+            />
+          </div>
+
+          {/* Video Controls */}
+          <div className="backdrop-blur-xl bg-card/50 border border-border rounded-2xl p-4">
+            <div className="flex items-center gap-6">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={toggleMute}
+                className="border-border hover:bg-secondary shrink-0"
+              >
+                {isMuted ? (
+                  <VolumeX className="w-5 h-5" />
+                ) : (
+                  <Volume2 className="w-5 h-5" />
+                )}
+              </Button>
+
+              <div className="flex-1 flex items-center gap-3">
+                <Volume2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                <Slider
+                  value={volume}
+                  onValueChange={setVolume}
+                  max={100}
+                  step={1}
+                  className="flex-1"
+                  disabled={isMuted}
+                />
+                <span className="text-sm text-muted-foreground min-w-[3ch] text-right">
+                  {volume[0]}
+                </span>
+              </div>
+
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={toggleFullscreen}
+                className="border-border hover:bg-secondary shrink-0"
+              >
+                <Maximize className="w-5 h-5" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Watchers Sidebar */}
+        <aside className="w-80 border-l border-border backdrop-blur-xl bg-card/30 p-6 overflow-y-auto">
+          <div className="mb-6">
+            <h2 className="text-xl font-bold mb-1">Watchers</h2>
+            <p className="text-sm text-muted-foreground">
+              {watchers.length} {watchers.length === 1 ? 'person' : 'people'} watching
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {watchers.map((watcher) => (
+              <div
+                key={watcher.id}
+                className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/50 hover:bg-secondary transition-colors"
+              >
+                <div className="w-10 h-10 rounded-full bg-gradient-primary flex items-center justify-center text-primary-foreground font-semibold shadow-glow">
+                  {watcher.name[0].toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">
+                    {watcher.name}
+                    {watcher.id === "current" && (
+                      <span className="ml-2 text-xs text-muted-foreground">(you)</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {getTimeAgo(watcher.joinedAt)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+};
+
+function getTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  
+  if (seconds < 60) return "Just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
+export default VideoRoom;

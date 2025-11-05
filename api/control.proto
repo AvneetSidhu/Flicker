@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package helloworld;
+package control;
 
 option go_package = "api/controlpb";
 
@@ -32,4 +32,5 @@ message InputMessage {
         MouseInput mouse = 2;
         ScrollInput scroll = 3;
     }
+    string roomID = 4;
 }

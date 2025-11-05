@@ -1,0 +1,45 @@
+name: Build & Deploy On Server
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          path: source
+
+      # Build Backend (Go SFU)
+      - name: Build Backend
+        working-directory: source
+        run: |
+          go mod tidy
+          go build -o backend-binary ./cmd/sfu
+
+      # Build Frontend (Vite)
+      - name: Build Frontend
+        working-directory: source/frontend
+        run: |
+          npm install
+          npm run build
+
+      # Deploy Artifacts to Runtime Directories
+      - name: Deploy Artifacts
+        run: |
+          # Backend
+          cp source/backend-binary ~/app/backend/backend-binary
+          chmod +x ~/app/backend/backend-binary
+
+          # Frontend
+          rm -rf ~/app/frontend/*
+          cp -r source/frontend/dist/* ~/app/frontend/
+
+      # Restart Backend Service
+      - name: Restart Backend
+        run: |
+          sudo systemctl restart myapp

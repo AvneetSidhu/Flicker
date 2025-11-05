@@ -97,7 +97,7 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { sfuServer.WsConnectHandler(ctx, w, r, api) })
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	go func() error {
-		err := http.ListenAndServe(fmt.Sprintf(":%s", cfg.Port), nil)
+		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%s", cfg.Port), nil)
 		if err != nil {
 			logger.Error("error starting server", "err", err)
 			os.Exit(1)

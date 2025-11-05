@@ -64,9 +64,10 @@ type Session struct {
 
 	activeStream atomic.Bool
 
-	cleanUpOnce sync.Once
-	cancel      context.CancelFunc
-	mu          sync.RWMutex
+	cleanUpOnce    sync.Once
+	rtpWriteCancel context.CancelFunc
+	cancel         context.CancelFunc
+	mu             sync.RWMutex
 }
 
 func NewSession(displayName string, userID string, conn *websocket.Conn, api *webrtc.API, logger *slog.Logger, roomManager roomManager, cancelFunc context.CancelFunc) *Session {
@@ -253,6 +254,10 @@ func (s *Session) IsActive() bool {
 
 func (s *Session) CleanUpSession() {
 	s.cleanUpOnce.Do(func() {
+		if s.IsActive() { //currently forwarding rtp
+			s.rtpWriteCancel()
+		}
+
 		if s.roomID != "" { // if in a room, remove from room first
 			room, ok := s.roomManager.GetRoom(s.roomID)
 			if !ok {

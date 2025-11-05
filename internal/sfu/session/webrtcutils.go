@@ -134,6 +134,8 @@ func (s *Session) defineCallbacks(pc *webrtc.PeerConnection, ctx context.Context
 		s.Logger.Info("Peer Connection State has changed", "state", state.String())
 		if state == webrtc.PeerConnectionStateConnected {
 			s.SetActiveStream(true)
+			ctx, cancel := context.WithCancel(ctx)
+			s.rtpWriteCancel = cancel
 			s.StartWritingRTP(ctx)
 		}
 
@@ -218,6 +220,10 @@ func (s *Session) StartWritingRTP(ctx context.Context) {
 				atomic.AddUint32(&s.audioPacketsSent, 1)
 				atomic.AddUint32(&s.audioBytesSent, uint32(len(pkt.Payload)))
 				atomic.StoreUint32(&s.latestAudioPacketTime, pkt.Timestamp)
+				if s.audioTrack == nil {
+					s.Logger.Warn("audio track is nil, cannot write RTP")
+					continue
+				}
 				s.audioTrack.WriteRTP(pkt)
 				// pkt.Release()
 			}
@@ -237,6 +243,10 @@ func (s *Session) StartWritingRTP(ctx context.Context) {
 				atomic.AddUint32(&s.videoPacketsSent, 1)
 				atomic.AddUint32(&s.videoBytesSent, uint32(len(pkt.Payload)))
 				atomic.StoreUint32(&s.latestVideoPacketTime, pkt.Timestamp)
+				if s.videoTrack == nil {
+					s.Logger.Warn("video track is nil, cannot write RTP")
+					continue
+				}
 				s.videoTrack.WriteRTP(pkt)
 				// pkt.Release()
 			}
