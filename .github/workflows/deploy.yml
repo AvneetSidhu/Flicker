@@ -18,6 +18,11 @@ jobs:
           go mod tidy
           go build -o backend-binary ./cmd/sfu
 
+      # Build VM Agent (Go)
+      - name: Build VM Agent
+        run: |
+          go build -o vmagent/vmagent-binary ./cmd/vmagent
+
       # Build Frontend (Vite)
       - name: Build Frontend
         working-directory: frontend
@@ -34,6 +39,13 @@ jobs:
         run: |
           cp backend-binary /home/deploy/app/backend/backend-binary
           chmod +x /home/deploy/app/backend/backend-binary
+
+      # Deploy VM Agent Binary
+      - name: Deploy VM Agent
+        run: |
+          mkdir -p /home/deploy/app/vmagent
+          cp vmagent/vmagent-binary /home/deploy/app/vmagent/vmagent-binary
+          chmod +x /home/deploy/app/vmagent/vmagent-binary
 
       # Deploy Frontend Files
       - name: Deploy Frontend

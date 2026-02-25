@@ -16,6 +16,9 @@ type WebSocketContextType = {
   connect: (displayName: string) => void;
   disconnect: () => void;
   send: (data: string | ArrayBufferLike | Blob | ArrayBufferView) => boolean;
+  sendJson: (msg: unknown) => boolean;
+  addMessageListener: (fn: (msg: any) => void) => void;
+  removeMessageListener: (fn: (msg: any) => void) => void;
 };
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(
@@ -42,6 +45,7 @@ export const WebSocketProvider = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const openListenerRef = useRef<(() => void) | null>(null);
+  const listenersRef = useRef(new Set<(msg: any) => void>());
 
   const disconnect = useCallback(() => {
     if (socket) {
@@ -100,6 +104,21 @@ export const WebSocketProvider = ({
           setIsConnected(false);
           setIsConnecting(false);
         };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            listenersRef.current.forEach((fn) => {
+              try {
+                fn(data);
+              } catch (err) {
+                console.error("WS listener error", err);
+              }
+            });
+          } catch (err) {
+            console.error("WS message parse error", err);
+          }
+        };
       } catch (e: any) {
         setIsConnecting(false);
         setError(e?.message || "Failed to connect");
@@ -119,6 +138,19 @@ export const WebSocketProvider = ({
     [socket]
   );
 
+  const sendJson = useCallback(
+    (msg: unknown) => send(JSON.stringify(msg)),
+    [send]
+  );
+
+  const addMessageListener = useCallback((fn: (msg: any) => void) => {
+    listenersRef.current.add(fn);
+  }, []);
+
+  const removeMessageListener = useCallback((fn: (msg: any) => void) => {
+    listenersRef.current.delete(fn);
+  }, []);
+
   useEffect(() => {
     return () => {
       // Cleanup on unmount
@@ -137,8 +169,22 @@ export const WebSocketProvider = ({
       connect,
       disconnect,
       send,
+      sendJson,
+      addMessageListener,
+      removeMessageListener,
     }),
-    [socket, isConnected, isConnecting, error, connect, disconnect, send]
+    [
+      socket,
+      isConnected,
+      isConnecting,
+      error,
+      connect,
+      disconnect,
+      send,
+      sendJson,
+      addMessageListener,
+      removeMessageListener,
+    ]
   );
 
   return (

@@ -1,8 +1,9 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { ArrowLeft, Volume2, VolumeX, Maximize, Users } from "lucide-react";
+import { useWebSocket } from "@/context/websocketcontext";
 
 interface Watcher {
   id: string;
@@ -26,6 +27,17 @@ const VideoRoom = () => {
   const [volume, setVolume] = useState([75]);
   const [watchers, setWatchers] = useState<Watcher[]>(mockWatchers);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const {
+    socket,
+    isConnected,
+    isConnecting,
+    connect,
+    sendJson,
+    addMessageListener,
+    removeMessageListener,
+  } = useWebSocket();
 
   useEffect(() => {
     const name = localStorage.getItem("displayName");
@@ -34,6 +46,10 @@ const VideoRoom = () => {
       return;
     }
     setDisplayName(name);
+
+    if (!isConnected && !isConnecting) {
+      connect(name);
+    }
     
     // Add current user to watchers
     setWatchers(prev => [...prev, {
@@ -41,13 +57,99 @@ const VideoRoom = () => {
       name: name,
       joinedAt: new Date()
     }]);
-  }, [navigate]);
+  }, [navigate, isConnected, isConnecting, connect]);
 
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.volume = volume[0] / 100;
     }
   }, [volume]);
+
+  const attachStream = useCallback(() => {
+    if (videoRef.current && remoteStreamRef.current) {
+      videoRef.current.srcObject = remoteStreamRef.current;
+    }
+  }, []);
+
+  const handleSignalMessage = useCallback(
+    async (msg: any) => {
+      if (!pcRef.current) return;
+      if (msg.type === "answer" && msg.payload?.sdp) {
+        const desc = new RTCSessionDescription({
+          type: "answer",
+          sdp: msg.payload.sdp,
+        });
+        await pcRef.current.setRemoteDescription(desc);
+      }
+      if (msg.type === "ice-candidate" && msg.payload?.candidate) {
+        try {
+          await pcRef.current.addIceCandidate({
+            candidate: msg.payload.candidate,
+            sdpMid: msg.payload.sdpMid,
+            sdpMLineIndex: msg.payload.sdpMLineIndex,
+          });
+        } catch (err) {
+          console.error("Error adding ICE candidate", err);
+        }
+      }
+    },
+    []
+  );
+
+  const startWebRTC = useCallback(async () => {
+    if (!roomId || pcRef.current) return;
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendJson({
+          type: "ice-candidate",
+          payload: {
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          },
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      if (!remoteStreamRef.current) {
+        remoteStreamRef.current = new MediaStream();
+      }
+      remoteStreamRef.current.addTrack(event.track);
+      attachStream();
+    };
+
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.addTransceiver("video", { direction: "recvonly" });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    sendJson({
+      type: "join-room",
+      payload: { roomId },
+    });
+
+    sendJson({
+      type: "offer",
+      payload: { sdp: offer.sdp },
+    });
+
+    pcRef.current = pc;
+  }, [attachStream, roomId, sendJson]);
+
+  useEffect(() => {
+    if (!socket || !isConnected) return;
+    addMessageListener(handleSignalMessage);
+    startWebRTC();
+    return () => {
+      removeMessageListener(handleSignalMessage);
+    };
+  }, [socket, isConnected, addMessageListener, removeMessageListener, handleSignalMessage, startWebRTC]);
 
   const toggleMute = () => {
     if (videoRef.current) {
@@ -69,6 +171,16 @@ const VideoRoom = () => {
   const handleBack = () => {
     navigate("/rooms");
   };
+
+  useEffect(() => {
+    return () => {
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      remoteStreamRef.current = null;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -100,9 +212,9 @@ const VideoRoom = () => {
             <video
               ref={videoRef}
               className="w-full h-full object-contain"
-              src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
               autoPlay
-              loop
+              playsInline
+              muted={isMuted}
             />
           </div>
 
