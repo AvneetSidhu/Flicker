@@ -18,11 +18,6 @@ jobs:
           go mod tidy
           go build -o backend-binary ./cmd/sfu
 
-      # Build VM Agent (Go)
-      - name: Build VM Agent
-        run: |
-          go build -o vmagent/vmagent-binary ./cmd/vmagent
-
       # Build Frontend (Vite)
       - name: Build Frontend
         working-directory: frontend
@@ -40,12 +35,18 @@ jobs:
           cp backend-binary /home/deploy/app/backend/backend-binary
           chmod +x /home/deploy/app/backend/backend-binary
 
-      # Deploy VM Agent Binary
+      # Deploy VM Agent Binary into base VM disk image
+      # vmagent runs inside the VM, not on the SFU host.
+      # virt-customize injects the binary directly into the offline disk.
+      # Requires: libguestfs-tools installed on the runner (apt install libguestfs-tools).
+      # Requires: the runner user to have access to /var/lib/libvirt/images (libvirt group).
       - name: Deploy VM Agent
         run: |
-          mkdir -p /home/deploy/app/vmagent
-          cp vmagent/vmagent-binary /home/deploy/app/vmagent/vmagent-binary
-          chmod +x /home/deploy/app/vmagent/vmagent-binary
+          go build -o /tmp/vmagent-binary ./cmd/vmagent
+          virt-customize -d flicker-node \
+            --upload /tmp/vmagent-binary:/usr/local/bin/vmagent \
+            --chmod 0755:/usr/local/bin/vmagent
+          rm /tmp/vmagent-binary
 
       # Deploy Frontend Files
       - name: Deploy Frontend

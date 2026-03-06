@@ -71,14 +71,11 @@ func (s *GRPCServer) StreamInputs(_ *emptypb.Empty, stream controlpb.InputServic
 	s.streams[roomIDs[0]] = stream
 	s.mu.Unlock()
 
-	go func(roomID string) {
-		<-stream.Context().Done()
-		s.mu.Lock()
-		delete(s.streams, roomID)
-		s.mu.Unlock()
-		s.logger.Info("stream closed", "roomID", roomID)
-	}(roomIDs[0])
-
+	<-stream.Context().Done()
+	s.mu.Lock()
+	delete(s.streams, roomIDs[0])
+	s.mu.Unlock()
+	s.logger.Info("stream closed", "roomID", roomIDs[0])
 	return nil
 }
 

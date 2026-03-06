@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/gorilla/websocket"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -20,7 +20,7 @@ type Room interface {
 
 type roomManager interface {
 	GetRoom(roomID string) (Room, bool)
-	CreateRoom(ctx context.Context, roomName string, creator string) error
+	CreateRoom(ctx context.Context, roomName string, creator string) (string, error)
 }
 
 type Session struct {
@@ -39,8 +39,8 @@ type Session struct {
 	//webrtc
 	PeerConn *webrtc.PeerConnection
 
-	VideoBuf chan *rtp.Packet
-	AudioBuf chan *rtp.Packet
+	VideoBuf chan *ingest.PooledPacket
+	AudioBuf chan *ingest.PooledPacket
 
 	audioTrack *webrtc.TrackLocalStaticRTP
 	videoTrack *webrtc.TrackLocalStaticRTP
@@ -75,8 +75,8 @@ func NewSession(displayName string, userID string, conn *websocket.Conn, api *we
 		DisplayName: displayName,
 		UserID:      userID,
 
-		AudioBuf: make(chan *rtp.Packet, 1000),
-		VideoBuf: make(chan *rtp.Packet, 1000),
+		AudioBuf: make(chan *ingest.PooledPacket, 1000),
+		VideoBuf: make(chan *ingest.PooledPacket, 1000),
 
 		socketConn: conn,
 		SendChan:   make(chan []byte, 256),
@@ -166,13 +166,16 @@ func (s *Session) ReadPump(ctx context.Context) {
 				s.Logger.Info("create room request received", "userID", s.UserID, "displayName", s.DisplayName)
 				if err != nil {
 					s.Logger.Error("readPump: error parsing create room payload", slog.String("error", err.Error()), slog.String("DisplayName", s.DisplayName), slog.String("userID", s.UserID))
+					continue
 				}
 
-				err = s.createRoom(ctx, createRoom.RoomName)
-
+				roomID, err := s.createRoom(ctx, createRoom.RoomName)
 				if err != nil {
 					s.Logger.Error("error creating room", "err", err, "display name", s.DisplayName)
+					continue
 				}
+
+				s.sendRoomCreated(roomID)
 
 			default:
 				s.Logger.Error("readPump: unknown message type", slog.String("type", wsMessage.Type), slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID))
@@ -199,9 +202,6 @@ func (s *Session) WritePump(ctx context.Context) {
 				s.Logger.Error("writePump: error writing message", slog.String("error", writeErr.Error()), slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID))
 				return
 			}
-
-		default:
-			continue
 		}
 	}
 }
@@ -236,12 +236,12 @@ func (s *Session) joinRoom(roomID string) error {
 	return nil
 }
 
-func (s *Session) createRoom(ctx context.Context, roomName string) error {
-	err := s.roomManager.CreateRoom(ctx, roomName, s.DisplayName)
+func (s *Session) createRoom(ctx context.Context, roomName string) (string, error) {
+	roomID, err := s.roomManager.CreateRoom(ctx, roomName, s.DisplayName)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return roomID, nil
 }
 
 func (s *Session) SetActiveStream(b bool) {
@@ -250,6 +250,24 @@ func (s *Session) SetActiveStream(b bool) {
 
 func (s *Session) IsActive() bool {
 	return s.activeStream.Load()
+}
+
+func (s *Session) sendRoomCreated(roomID string) {
+	payload, err := json.Marshal(RoomCreatedPayload{RoomID: roomID})
+	if err != nil {
+		s.Logger.Error("error marshalling room-created payload", "err", err)
+		return
+	}
+	msg, err := json.Marshal(WSMessage{Type: "room-created", Payload: payload})
+	if err != nil {
+		s.Logger.Error("error marshalling room-created message", "err", err)
+		return
+	}
+	select {
+	case s.SendChan <- msg:
+	default:
+		s.Logger.Warn("SendChan full, dropping room-created message")
+	}
 }
 
 func (s *Session) CleanUpSession() {

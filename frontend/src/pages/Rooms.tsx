@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Users, Video, LogOut, Plus } from "lucide-react";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useWebSocket } from "@/context/websocketcontext";
 
 interface Room {
   id: string;
@@ -22,57 +23,24 @@ interface Room {
   isLive: boolean;
 }
 
-const mockRooms: Room[] = [
-  {
-    id: "1",
-    name: "Movie Night",
-    creator: "Alex",
-    viewers: 24,
-    isLive: true,
-  },
-  {
-    id: "2",
-    name: "Gaming Stream",
-    creator: "Jordan",
-    viewers: 142,
-    isLive: true,
-  },
-  {
-    id: "3",
-    name: "Chill Vibes",
-    creator: "Sam",
-    viewers: 56,
-    isLive: true,
-  },
-  {
-    id: "4",
-    name: "Study Session",
-    creator: "Taylor",
-    viewers: 89,
-    isLive: true,
-  },
-  {
-    id: "5",
-    name: "Anime Club",
-    creator: "Morgan",
-    viewers: 203,
-    isLive: true,
-  },
-  {
-    id: "6",
-    name: "Workout Together",
-    creator: "Casey",
-    viewers: 67,
-    isLive: true,
-  },
-];
-
 const Rooms = () => {
   const navigate = useNavigate();
   const [displayName, setDisplayName] = useState("");
-  const [rooms, setRooms] = useState<Room[]>(mockRooms);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
+  const { isConnected, isConnecting, connect, sendJson, addMessageListener, removeMessageListener } = useWebSocket();
+
+  const fetchRooms = useCallback(async () => {
+    try {
+      const res = await fetch("/rooms");
+      if (!res.ok) return;
+      const data = await res.json();
+      setRooms(data ?? []);
+    } catch {
+      // server unreachable; leave list empty
+    }
+  }, []);
 
   useEffect(() => {
     const name = localStorage.getItem("displayName");
@@ -81,7 +49,24 @@ const Rooms = () => {
       return;
     }
     setDisplayName(name);
-  }, [navigate]);
+    fetchRooms();
+
+    if (!isConnected && !isConnecting) {
+      connect(name);
+    }
+  }, [navigate, fetchRooms, isConnected, isConnecting, connect]);
+
+  // Navigate into a room once the backend confirms creation and returns the roomId
+  useEffect(() => {
+    const onMessage = (msg: any) => {
+      if (msg.type === "room-created" && msg.payload?.roomId) {
+        fetchRooms();
+        navigate(`/room/${msg.payload.roomId}`);
+      }
+    };
+    addMessageListener(onMessage);
+    return () => removeMessageListener(onMessage);
+  }, [addMessageListener, removeMessageListener, fetchRooms, navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem("displayName");
@@ -94,16 +79,7 @@ const Rooms = () => {
 
   const handleCreateRoom = () => {
     if (!newRoomName.trim()) return;
-    
-    const newRoom: Room = {
-      id: Date.now().toString(),
-      name: newRoomName,
-      creator: displayName,
-      viewers: 1,
-      isLive: true,
-    };
-    
-    setRooms([newRoom, ...rooms]);
+    sendJson({ type: "create-room", payload: { roomName: newRoomName.trim() } });
     setNewRoomName("");
     setIsCreateDialogOpen(false);
   };
@@ -141,12 +117,13 @@ const Rooms = () => {
 
       {/* Main Content */}
       <main className="container mx-auto px-6 py-8">
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-3xl font-bold mb-2">Live Rooms</h2>
             <p className="text-muted-foreground">Join a room and watch together</p>
           </div>
           
+          <div className="flex items-center gap-3">
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -196,6 +173,7 @@ const Rooms = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

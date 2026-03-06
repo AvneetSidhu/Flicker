@@ -7,6 +7,7 @@ import Landing from "./pages/Landing";
 import Rooms from "./pages/Rooms";
 import VideoRoom from "./pages/VideoRoom";
 import NotFound from "./pages/NotFound";
+import { WebSocketProvider } from "./context/websocketcontext";
 
 const queryClient = new QueryClient();
 
@@ -16,12 +17,14 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/rooms" element={<Rooms />} />
-          <Route path="/room/:roomId" element={<VideoRoom />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <WebSocketProvider>
+          <Routes>
+            <Route path="/" element={<Landing />} />
+            <Route path="/rooms" element={<Rooms />} />
+            <Route path="/room/:roomId" element={<VideoRoom />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </WebSocketProvider>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

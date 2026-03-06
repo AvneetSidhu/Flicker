@@ -10,6 +10,8 @@ import (
 	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/session"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/vm"
+	"github.com/google/uuid"
 )
 
 // make thread safe
@@ -20,9 +22,10 @@ type RoomManager struct {
 	mu                     sync.RWMutex
 	controlEventMessageBus chan<- *control.CommandEvent
 	ingestManager          *ingest.IngestManager
+	vmService              *vm.VMService
 }
 
-func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.CommandEvent, ingestManager *ingest.IngestManager) *RoomManager {
+func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.CommandEvent, ingestManager *ingest.IngestManager, vmService *vm.VMService) *RoomManager {
 	return &RoomManager{
 		rooms:                  make(map[string]*Room),
 		logger:                 logger,
@@ -30,6 +33,7 @@ func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.
 		mu:                     sync.RWMutex{},
 		controlEventMessageBus: controlEventMessageBus,
 		ingestManager:          ingestManager,
+		vmService:              vmService,
 	}
 }
 
@@ -40,28 +44,32 @@ func (rm *RoomManager) GetRoom(roomID string) (session.Room, bool) {
 	return room, ok
 }
 
-func (rm *RoomManager) CreateRoom(ctx context.Context, roomName string, creator string) error {
+func (rm *RoomManager) CreateRoom(ctx context.Context, roomName string, creator string) (string, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if len(rm.rooms) >= 10 {
-		return fmt.Errorf("Maximum rooms created, unable to create new room")
+		return "", fmt.Errorf("Maximum rooms created, unable to create new room")
 	}
 	audioPort, _, videoPort, _, err := allocateRoomPorts()
 	if err != nil {
-		return fmt.Errorf("error allocating room ports: %w", err)
+		return "", fmt.Errorf("error allocating room ports: %w", err)
 	}
 
-	roomID := "12345"
+	roomID := uuid.New().String()
 	rm.logger.Info("Creating room", slog.Any("roomID", roomID), slog.String("creator", creator))
 
-	room := NewRoom(rm.logger, roomID, rm.controlEventMessageBus)
+	room := NewRoom(rm.logger, roomID, roomName, creator, rm.controlEventMessageBus)
 
 	rm.ingestManager.AddRoom(roomID, audioPort, videoPort, room, ctx)
 
-	//only call broadcast when room ingest is live. room.broadcast(ctx)
-	//vm spin up go routine here, async ask for ingest and hook up the agent to ingest and grpc before showing the room is joinable
+	go func() {
+		if err := rm.vmService.CreateVM(ctx, roomID, audioPort, videoPort); err != nil {
+			rm.logger.Error("failed to provision VM for room", "roomID", roomID, "err", err)
+		}
+	}()
+
 	rm.rooms[room.RoomID] = room
-	return nil
+	return roomID, nil
 }
 
 func (rm *RoomManager) DeleteRoom(roomID string) error {
@@ -74,9 +82,37 @@ func (rm *RoomManager) DeleteRoom(roomID string) error {
 
 	rm.ingestManager.RemoveRoom(roomID)
 
+	if err := rm.vmService.DestroyVM(roomID); err != nil {
+		rm.logger.Error("failed to destroy VM for room", "roomID", roomID, "err", err)
+	}
+
 	delete(rm.rooms, roomID)
 	rm.logger.Info("Removed room", slog.Any("roomID", roomID))
 	return nil
+}
+
+type RoomInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Creator string `json:"creator"`
+	Viewers int    `json:"viewers"`
+	IsLive  bool   `json:"isLive"`
+}
+
+func (rm *RoomManager) GetRooms() []RoomInfo {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	rooms := make([]RoomInfo, 0, len(rm.rooms))
+	for _, r := range rm.rooms {
+		rooms = append(rooms, RoomInfo{
+			ID:      r.RoomID,
+			Name:    r.Name,
+			Creator: r.Creator,
+			Viewers: r.MemberCount(),
+			IsLive:  true,
+		})
+	}
+	return rooms
 }
 
 func allocateRoomPorts() (audioRTP, audioRTCP, videoRTP, videoRTCP int, err error) {

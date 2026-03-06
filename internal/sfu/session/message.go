@@ -29,3 +29,7 @@ type ICECandidatePayload struct {
 type CreateRoomPayload struct {
 	RoomName string `json:"roomName"`
 }
+
+type RoomCreatedPayload struct {
+	RoomID string `json:"roomId"`
+}

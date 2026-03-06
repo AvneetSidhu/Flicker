@@ -212,7 +212,11 @@ func (s *Session) StartWritingRTP(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case pkt := <-s.AudioBuf:
+			case pooled := <-s.AudioBuf:
+				if pooled == nil {
+					return
+				}
+				pkt := pooled.Packet
 				if s.audioPacketsSent == 0 {
 					s.masterRTPStartTime = pkt.Timestamp
 				}
@@ -222,10 +226,11 @@ func (s *Session) StartWritingRTP(ctx context.Context) {
 				atomic.StoreUint32(&s.latestAudioPacketTime, pkt.Timestamp)
 				if s.audioTrack == nil {
 					s.Logger.Warn("audio track is nil, cannot write RTP")
+					pooled.Release()
 					continue
 				}
 				s.audioTrack.WriteRTP(pkt)
-				// pkt.Release()
+				pooled.Release()
 			}
 		}
 	}()
@@ -235,7 +240,11 @@ func (s *Session) StartWritingRTP(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case pkt := <-s.VideoBuf:
+			case pooled := <-s.VideoBuf:
+				if pooled == nil {
+					return
+				}
+				pkt := pooled.Packet
 				if s.videoPacketsSent == 0 {
 					s.nonMasterRTPStartTime = pkt.Timestamp
 				}
@@ -245,10 +254,11 @@ func (s *Session) StartWritingRTP(ctx context.Context) {
 				atomic.StoreUint32(&s.latestVideoPacketTime, pkt.Timestamp)
 				if s.videoTrack == nil {
 					s.Logger.Warn("video track is nil, cannot write RTP")
+					pooled.Release()
 					continue
 				}
 				s.videoTrack.WriteRTP(pkt)
-				// pkt.Release()
+				pooled.Release()
 			}
 		}
 	}()

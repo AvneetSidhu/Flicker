@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pion/rtp"
 )
@@ -59,11 +60,15 @@ func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType 
 			case <-ctx.Done():
 				return
 			default:
+				conn.SetReadDeadline(time.Now().Add(time.Second))
 				buf := w.bufPool.Get().([]byte)
 				n, _, err := conn.ReadFrom(buf)
 
 				if err != nil {
 					w.returnBuffer(buf)
+					if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+						continue
+					}
 					w.logger.Error("error reading from udp connection", "err", err)
 					continue
 				}
@@ -82,14 +87,14 @@ func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType 
 					continue
 				}
 
-				// wrappedPkt := &PooledPacket{
-				// 	Packet: pkt,
-				// 	Buffer: buf,
-				// 	done:   func(buf []byte) { w.returnBuffer(buf) },
-				// 	Time:   pkt.Timestamp,
-				// }
+				wrappedPkt := &PooledPacket{
+					Packet: pkt,
+					Buffer: buf,
+					done:   func(buf []byte) { w.returnBuffer(buf) },
+					Time:   pkt.Timestamp,
+				}
 
-				w.room.Broadcast(pkt, packetType)
+				w.room.Broadcast(wrappedPkt, packetType)
 			}
 		}
 	}()

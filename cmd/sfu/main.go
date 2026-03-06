@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/room"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/server"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/vm"
 	"github.com/joho/godotenv"
 	"github.com/pion/webrtc/v3"
 	"google.golang.org/grpc"
@@ -49,17 +51,17 @@ func loadConfig() (*sfu.Config, error) {
 		return nil, fmt.Errorf("missing SFU_GRPC_PORT")
 	}
 
-	ingestPort := os.Getenv("INGEST_PORT")
-	if ingestPort == "" {
-		return nil, fmt.Errorf("missing INGEST_PORT")
+	vmBaseName := os.Getenv("VM_BASE_NAME")
+	if vmBaseName == "" {
+		return nil, fmt.Errorf("missing VM_BASE_NAME")
 	}
 
 	return &sfu.Config{
-		Port:          wsPort,
-		Tailnet:       tailnet,
-		LogLevel:      logLevel,
-		GRPCPort:      grpcPort,
-		IngestionPort: ingestPort,
+		Port:       wsPort,
+		Tailnet:    tailnet,
+		LogLevel:   logLevel,
+		GRPCPort:   grpcPort,
+		VMBaseName: vmBaseName,
 	}, nil
 }
 
@@ -96,6 +98,14 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { sfuServer.WsConnectHandler(ctx, w, r, api) })
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	http.HandleFunc("/rooms", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(roomManager.GetRooms())
+	})
 	go func() error {
 		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%s", cfg.Port), nil)
 		if err != nil {
@@ -147,9 +157,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	ingestService := ingest.NewIngestManager(logger, cfg.IngestionPort)
+	ingestService := ingest.NewIngestManager(logger)
 
-	roomManager := room.NewRoomManager(logger, controlMessageEventBus, ingestService)
+	vmService := vm.NewVMService(logger, vm.VMServiceConfig{
+		BaseDomain: cfg.VMBaseName,
+		SFUHost:    cfg.Tailnet,
+		GRPCPort:   cfg.GRPCPort,
+	})
+
+	roomManager := room.NewRoomManager(logger, controlMessageEventBus, ingestService, vmService)
 
 	if err := startWebSocketServer(ctx, cfg, logger, roomManager); err != nil {
 		slog.Error("error starting web socket server", "err", err)

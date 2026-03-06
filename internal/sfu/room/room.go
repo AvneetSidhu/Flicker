@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 
 	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
+	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/session"
-	"github.com/pion/rtp"
 )
 
 const (
@@ -25,15 +25,19 @@ type Room struct {
 	logger *slog.Logger
 
 	RoomID            string
+	Name              string
+	Creator           string
 	membersSnapshot   atomic.Value
 	CurrentController string
 	inputForward      chan<- *control.CommandEvent
 }
 
 // use atomic.Value for members snapshot / create on write
-func NewRoom(logger *slog.Logger, roomID string, inputForward chan<- *control.CommandEvent) *Room {
+func NewRoom(logger *slog.Logger, roomID string, name string, creator string, inputForward chan<- *control.CommandEvent) *Room {
 	r := &Room{
 		RoomID:            roomID,
+		Name:              name,
+		Creator:           creator,
 		CurrentController: "",
 		inputForward:      inputForward,
 		logger:            logger,
@@ -77,9 +81,13 @@ func (r *Room) GetMember(userName string) *session.Session {
 	return nil
 }
 
-func (r *Room) Broadcast(pkt *rtp.Packet, bufferType string) {
+func (r *Room) MemberCount() int {
+	return len(r.membersSnapshot.Load().([]*session.Session))
+}
 
-	// pkt.Acquire()
+func (r *Room) Broadcast(pkt *ingest.PooledPacket, bufferType string) {
+
+	pkt.Acquire()
 
 	snapshot := r.membersSnapshot.Load().([]*session.Session)
 	activeUsers := int32(0)
@@ -91,35 +99,36 @@ func (r *Room) Broadcast(pkt *rtp.Packet, bufferType string) {
 		activeUsers++
 	}
 
-	// if activeUsers == 0 {
-	// 	pkt.Release()
-	// 	return
-	// }
+	if activeUsers == 0 {
+		pkt.Release()
+		return
+	}
 
-	// pkt.AcquireBulk(activeUsers - 1)
+	pkt.AcquireBulk(activeUsers - 1)
 	for _, u := range snapshot {
 		if !u.IsActive() {
 			continue
 		}
 		if bufferType == "audio" {
 			if err := sendWithRetry(pkt, u.AudioBuf); err != nil {
-				// pkt.Release()
+				pkt.Release()
 			}
 		} else {
 			if err := sendWithRetry(pkt, u.VideoBuf); err != nil {
-				// pkt.Release()
+				pkt.Release()
 			}
 		}
 	}
 
 }
 
-func sendWithRetry(pkt *rtp.Packet, ch chan *rtp.Packet) error {
+func sendWithRetry(pkt *ingest.PooledPacket, ch chan *ingest.PooledPacket) error {
 	select {
 	case ch <- pkt:
 		return nil
 	default:
-		<-ch
+		dropped := <-ch
+		dropped.Release()
 		select {
 		case ch <- pkt:
 			return nil

@@ -45,13 +45,13 @@ func loadConfig() (*vmagent.Config, error) {
 		return nil, fmt.Errorf("missing ROOM_ID")
 	}
 
-	videoPort := os.Getenv("AUDIO_PORT")
-	if videoPort == "" {
+	audioPort := os.Getenv("AUDIO_PORT")
+	if audioPort == "" {
 		return nil, fmt.Errorf("missing AUDIO_PORT")
 	}
 
-	audioPort := os.Getenv("VIDEO_PORT")
-	if audioPort == "" {
+	videoPort := os.Getenv("VIDEO_PORT")
+	if videoPort == "" {
 		return nil, fmt.Errorf("missing VIDEO_PORT")
 	}
 
@@ -101,11 +101,6 @@ func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logge
 	}
 
 	logger.Info("Starting GStreamer ingest pipeline", "cmd", cmd.String())
-
-	// 3. Start the process
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start GStreamer: %w", err)
-	}
 
 	go func() {
 		<-ctx.Done()
