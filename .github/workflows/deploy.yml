@@ -41,11 +41,9 @@ jobs:
       # Requires: libguestfs-tools installed on the runner (apt install libguestfs-tools).
       # Requires: the runner user to have access to /var/lib/libvirt/images (libvirt group).
       - name: Deploy VM Agent
-        env:
-          LIBGUESTFS_BACKEND: direct
         run: |
           go build -o /tmp/vmagent-binary ./cmd/vmagent
-          virt-customize --connect qemu:///system -d flicker-node \
+          sudo LIBGUESTFS_BACKEND=direct virt-customize --connect qemu:///system --no-network -d flicker-node \
             --upload /tmp/vmagent-binary:/usr/local/bin/vmagent \
             --chmod 0755:/usr/local/bin/vmagent
           rm /tmp/vmagent-binary
