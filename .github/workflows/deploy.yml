@@ -43,6 +43,12 @@ jobs:
       - name: Deploy VM Agent
         run: |
           go build -o /tmp/vmagent-binary ./cmd/vmagent
+          virsh -c qemu:///system shutdown flicker-node || true
+          for i in $(seq 1 12); do
+            STATE=$(virsh -c qemu:///system domstate flicker-node 2>/dev/null || echo "shut off")
+            if [ "$STATE" = "shut off" ]; then break; fi
+            sleep 5
+          done
           sudo LIBGUESTFS_BACKEND=direct virt-customize --connect qemu:///system --no-network -d flicker-node \
             --upload /tmp/vmagent-binary:/usr/local/bin/vmagent \
             --chmod 0755:/usr/local/bin/vmagent
