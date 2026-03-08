@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 
 	"syscall"
 	"time"
@@ -105,6 +106,23 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(roomManager.GetRooms())
+	})
+	http.HandleFunc("/rooms/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		roomID := strings.TrimPrefix(r.URL.Path, "/rooms/")
+		if roomID == "" {
+			http.Error(w, "roomID required", http.StatusBadRequest)
+			return
+		}
+		if err := roomManager.DeleteRoom(roomID); err != nil {
+			logger.Error("failed to delete room", "roomID", roomID, "err", err)
+			http.Error(w, "failed to delete room", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	go func() error {
 		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%s", cfg.Port), nil)

@@ -14,6 +14,6 @@
 
 ## what to do
 
-- right now I am returning to this project so we'll need to review what we have so far to see if it meets requirements
-- I know the frontend and backend are not connected properly yet
-- there are a lot of unfinished features lets document whats not done and put it in txt file.
+- right now we have it functioning so the frontend can trigger a new virtual machine to be spun up, we don't have the VM deletion made yet it needs to be implemented so we don't run out of disk space on the host
+- we also have the issue of the frontend not receiving any audio / video from the vm agent
+- we need to get a/v running before we move onto other stuff, right after we get vm cleanup and deletion worked out

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Users, Video, LogOut, Plus } from "lucide-react";
+import { Users, Video, LogOut, Plus, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -56,6 +56,11 @@ const Rooms = () => {
     }
   }, [navigate, fetchRooms, isConnected, isConnecting, connect]);
 
+  useEffect(() => {
+    const interval = setInterval(fetchRooms, 5000);
+    return () => clearInterval(interval);
+  }, [fetchRooms]);
+
   // Navigate into a room once the backend confirms creation and returns the roomId
   useEffect(() => {
     const onMessage = (msg: any) => {
@@ -82,6 +87,16 @@ const Rooms = () => {
     sendJson({ type: "create-room", payload: { roomName: newRoomName.trim() } });
     setNewRoomName("");
     setIsCreateDialogOpen(false);
+  };
+
+  const handleDeleteRoom = async (e: React.MouseEvent, roomId: string) => {
+    e.stopPropagation();
+    try {
+      await fetch(`/rooms/${roomId}`, { method: "DELETE" });
+      fetchRooms();
+    } catch {
+      // ignore
+    }
   };
 
   return (
@@ -192,10 +207,21 @@ const Rooms = () => {
                   </div>
                 )}
 
-                {/* Viewers */}
-                <div className="px-3 py-1 rounded bg-secondary text-xs font-medium flex items-center gap-1 ml-auto">
-                  <Users className="w-3 h-3" />
-                  {room.viewers}
+                <div className="flex items-center gap-2 ml-auto">
+                  {/* Viewers */}
+                  <div className="px-3 py-1 rounded bg-secondary text-xs font-medium flex items-center gap-1">
+                    <Users className="w-3 h-3" />
+                    {room.viewers}
+                  </div>
+
+                  {/* Delete */}
+                  <button
+                    onClick={(e) => handleDeleteRoom(e, room.id)}
+                    className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    title="Delete room"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
 
