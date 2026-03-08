@@ -20,7 +20,7 @@ import (
 )
 
 func loadConfig() (*vmagent.Config, error) {
-	err := godotenv.Load()
+	err := godotenv.Load("/etc/vmagent.env")
 	if err != nil {
 		return nil, fmt.Errorf("error loading .env file, %v", err)
 	}
