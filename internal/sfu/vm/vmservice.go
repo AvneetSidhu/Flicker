@@ -78,6 +78,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 		"--no-network",
 		"-d", domainName,
 		"--upload", fmt.Sprintf("%s:/etc/vmagent.env", envFile.Name()),
+		"--chmod", "0644:/etc/vmagent.env",
 	)
 	virtCustomize.Env = append(os.Environ(), "LIBGUESTFS_BACKEND=direct")
 	if out, err := virtCustomize.CombinedOutput(); err != nil {

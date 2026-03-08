@@ -168,11 +168,18 @@ func runInjectorService(ctx context.Context, logger *slog.Logger, ch <-chan *con
 	return nil
 }
 
+// Injected at build time via -ldflags.
+var (
+	buildDate = "unknown"
+	buildTime = "unknown"
+)
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger.Info("vmagent starting", "buildDate", buildDate, "buildTime", buildTime)
 
 	cfg, err := loadConfig()
 	if err != nil {

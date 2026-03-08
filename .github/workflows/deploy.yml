@@ -42,7 +42,30 @@ jobs:
       # Requires: the runner user to have access to /var/lib/libvirt/images (libvirt group).
       - name: Deploy VM Agent
         run: |
-          go build -o /tmp/vmagent-binary ./cmd/vmagent
+          BUILD_DATE=$(date +%Y-%m-%d)
+          BUILD_TIME=$(date +%H:%M:%S)
+          go build \
+            -ldflags "-X main.buildDate=${BUILD_DATE} -X main.buildTime=${BUILD_TIME}" \
+            -o /tmp/vmagent-binary ./cmd/vmagent
+
+          cat > /tmp/vmagent.service << 'EOF'
+          [Unit]
+          Description=Flicker VM Agent
+          After=network.target network-online.target
+          Wants=network-online.target
+
+          [Service]
+          EnvironmentFile=/etc/vmagent.env
+          ExecStart=/usr/local/bin/vmagent
+          Restart=on-failure
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
           virsh -c qemu:///system shutdown flicker-node || true
           for i in $(seq 1 12); do
             STATE=$(virsh -c qemu:///system domstate flicker-node 2>/dev/null || echo "shut off")
@@ -51,8 +74,11 @@ jobs:
           done
           sudo LIBGUESTFS_BACKEND=direct virt-customize --connect qemu:///system --no-network -d flicker-node \
             --upload /tmp/vmagent-binary:/usr/local/bin/vmagent \
-            --chmod 0755:/usr/local/bin/vmagent
-          rm /tmp/vmagent-binary
+            --chmod 0755:/usr/local/bin/vmagent \
+            --upload /tmp/vmagent.service:/etc/systemd/system/vmagent.service \
+            --run-command 'chmod 0644 /etc/systemd/system/vmagent.service' \
+            --run-command 'systemctl enable vmagent'
+          rm /tmp/vmagent-binary /tmp/vmagent.service
 
       # Deploy Frontend Files
       - name: Deploy Frontend
@@ -70,3 +96,7 @@ jobs:
       # Restart Backend Service
       - name: Start Backend Service
         run: sudo systemctl start myapp
+
+      # Reload Nginx to serve new frontend files
+      - name: Reload Nginx
+        run: sudo systemctl reload nginx
