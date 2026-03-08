@@ -43,7 +43,7 @@ jobs:
       - name: Deploy VM Agent
         run: |
           go build -o /tmp/vmagent-binary ./cmd/vmagent
-          virt-customize -d flicker-node \
+          virt-customize --connect qemu:///system -d flicker-node \
             --upload /tmp/vmagent-binary:/usr/local/bin/vmagent \
             --chmod 0755:/usr/local/bin/vmagent
           rm /tmp/vmagent-binary

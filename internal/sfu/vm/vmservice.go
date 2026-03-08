@@ -44,6 +44,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 
 	// Clone the base domain (creates a stopped VM with a new QCOW2 overlay).
 	if out, err := exec.CommandContext(ctx, "virt-clone",
+		"--connect", "qemu:///system",
 		"--original", s.cfg.BaseDomain,
 		"--name", domainName,
 		"--auto-clone",
@@ -72,6 +73,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 	envFile.Close()
 
 	if out, err := exec.CommandContext(ctx, "virt-customize",
+		"--connect", "qemu:///system",
 		"-d", domainName,
 		"--upload", fmt.Sprintf("%s:/etc/vmagent.env", envFile.Name()),
 	).CombinedOutput(); err != nil {
@@ -82,7 +84,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 	os.Remove(envFile.Name())
 
 	// Start the VM.
-	if out, err := exec.CommandContext(ctx, "virsh", "start", domainName).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "virsh", "-c", "qemu:///system", "start", domainName).CombinedOutput(); err != nil {
 		s.cleanupDomain(domainName)
 		return fmt.Errorf("virsh start failed: %w: %s", err, out)
 	}
@@ -112,9 +114,9 @@ func (s *VMService) DestroyVM(roomID string) error {
 // Errors are logged but not returned — best-effort cleanup.
 func (s *VMService) cleanupDomain(domainName string) {
 	// destroy is a force-stop; ignore error if the VM is already stopped.
-	exec.Command("virsh", "destroy", domainName).Run()
+	exec.Command("virsh", "-c", "qemu:///system", "destroy", domainName).Run()
 
-	if out, err := exec.Command("virsh", "undefine", domainName, "--remove-all-storage").CombinedOutput(); err != nil {
+	if out, err := exec.Command("virsh", "-c", "qemu:///system", "undefine", domainName, "--remove-all-storage").CombinedOutput(); err != nil {
 		s.logger.Error("virsh undefine failed", "domain", domainName, "err", err, "out", string(out))
 	}
 }
