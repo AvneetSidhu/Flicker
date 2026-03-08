@@ -76,7 +76,7 @@ func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logge
         rtpbin name=rtpbin`
 
 	fullShellCommand := fmt.Sprintf(
-		"gst-launch-1.0 -v %s",
+		"/usr/bin/gst-launch-1.0 -v %s",
 		gstreamerCommand,
 	)
 
