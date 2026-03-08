@@ -72,11 +72,13 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 	}
 	envFile.Close()
 
-	if out, err := exec.CommandContext(ctx, "virt-customize",
+	virtCustomize := exec.CommandContext(ctx, "virt-customize",
 		"--connect", "qemu:///system",
 		"-d", domainName,
 		"--upload", fmt.Sprintf("%s:/etc/vmagent.env", envFile.Name()),
-	).CombinedOutput(); err != nil {
+	)
+	virtCustomize.Env = append(os.Environ(), "LIBGUESTFS_BACKEND=direct")
+	if out, err := virtCustomize.CombinedOutput(); err != nil {
 		os.Remove(envFile.Name())
 		s.cleanupDomain(domainName)
 		return fmt.Errorf("virt-customize failed: %w: %s", err, out)
