@@ -57,6 +57,7 @@ jobs:
           Description=Flicker VM Agent
           After=network.target network-online.target
           Wants=network-online.target
+          ConditionPathExists=/etc/vmagent.env
 
           [Service]
           EnvironmentFile=/etc/vmagent.env

@@ -48,6 +48,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 		"--original", s.cfg.BaseDomain,
 		"--name", domainName,
 		"--auto-clone",
+		"--check", "disk_size=off",
 	).CombinedOutput(); err != nil {
 		return fmt.Errorf("virt-clone failed: %w: %s", err, out)
 	}
