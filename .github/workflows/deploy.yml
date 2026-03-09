@@ -16,7 +16,11 @@ jobs:
       - name: Build Backend
         run: |
           go mod tidy
-          go build -o backend-binary ./cmd/sfu
+          BUILD_DATE=$(date +%Y-%m-%d)
+          BUILD_TIME=$(date +%H:%M:%S)
+          go build \
+            -ldflags "-X main.buildDate=${BUILD_DATE} -X main.buildTime=${BUILD_TIME}" \
+            -o backend-binary ./cmd/sfu
 
       # Build Frontend (Vite)
       - name: Build Frontend

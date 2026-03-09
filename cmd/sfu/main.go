@@ -153,6 +153,12 @@ func parsedLogLevel(level string) slog.Level {
 	}
 }
 
+// Injected at build time via -ldflags.
+var (
+	buildDate = "unknown"
+	buildTime = "unknown"
+)
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -166,7 +172,7 @@ func main() {
 	logLevel := parsedLogLevel(cfg.LogLevel)
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
-	logger.Debug("logger initialized")
+	logger.Info("sfu starting", "buildDate", buildDate, "buildTime", buildTime)
 
 	controlMessageEventBus := make(chan *control.CommandEvent, 5000)
 
