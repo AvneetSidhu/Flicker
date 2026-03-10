@@ -12,4 +12,8 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  define: {
+    __BUILD_DATE__: JSON.stringify(process.env.BUILD_DATE ?? "dev"),
+    __BUILD_TIME__: JSON.stringify(process.env.BUILD_TIME ?? ""),
+  },
 }));

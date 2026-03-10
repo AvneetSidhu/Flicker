@@ -48,9 +48,13 @@ jobs:
         run: |
           BUILD_DATE=$(date +%Y-%m-%d)
           BUILD_TIME=$(date +%H:%M:%S)
+          GIT_COMMIT=$(git rev-parse --short HEAD)
           go build \
             -ldflags "-X main.buildDate=${BUILD_DATE} -X main.buildTime=${BUILD_TIME}" \
             -o /tmp/vmagent-binary ./cmd/vmagent
+
+          printf "build_date=%s\nbuild_time=%s\ngit_commit=%s\n" \
+            "${BUILD_DATE}" "${BUILD_TIME}" "${GIT_COMMIT}" > /tmp/vmagent-version.txt
 
           cat > /tmp/vmagent.service << 'EOF'
           [Unit]
@@ -82,8 +86,10 @@ jobs:
             --chmod 0755:/usr/local/bin/vmagent \
             --upload /tmp/vmagent.service:/etc/systemd/system/vmagent.service \
             --run-command 'chmod 0644 /etc/systemd/system/vmagent.service' \
-            --run-command 'systemctl enable vmagent'
-          rm /tmp/vmagent-binary /tmp/vmagent.service
+            --run-command 'systemctl enable vmagent' \
+            --upload /tmp/vmagent-version.txt:/etc/vmagent-version.txt \
+            --chmod 0644:/etc/vmagent-version.txt
+          rm /tmp/vmagent-binary /tmp/vmagent.service /tmp/vmagent-version.txt
 
       # Deploy Frontend Files
       - name: Deploy Frontend

@@ -114,6 +114,9 @@ const Rooms = () => {
           </div>
           
           <div className="flex items-center gap-4">
+            <span className="text-xs text-muted-foreground/50 font-mono">
+              {__BUILD_DATE__}{__BUILD_TIME__ ? ` ${__BUILD_TIME__}` : ""}
+            </span>
             <span className="text-sm text-muted-foreground">
               Welcome, <span className="text-foreground font-medium">{displayName}</span>
             </span>
