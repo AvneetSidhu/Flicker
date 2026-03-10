@@ -80,6 +80,9 @@ func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logge
 		fullShellCommand,
 	)
 
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env,
 		fmt.Sprintf("SFU_IP=%s", cfg.SFUForwardAddr),

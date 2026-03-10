@@ -24,11 +24,12 @@ func NewIngestManager(logger *slog.Logger) *IngestManager {
 	}
 }
 
-func (i *IngestManager) AddRoom(roomID string, audioPort int, videoPort int, room Room, ctx context.Context) {
+func (i *IngestManager) AddRoom(roomID string, audioPort int, videoPort int, room Room, onReady func(), ctx context.Context) {
 	ingestWorker := &ingestWorker{
 		audioPort: audioPort,
 		videoPort: videoPort,
 		room:      room,
+		onReady:   onReady,
 		bufPool:   &i.bufPool,
 		logger:    i.logger,
 		roomID:    roomID,

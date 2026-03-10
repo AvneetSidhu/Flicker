@@ -60,7 +60,7 @@ func (rm *RoomManager) CreateRoom(ctx context.Context, roomName string, creator 
 
 	room := NewRoom(rm.logger, roomID, roomName, creator, rm.controlEventMessageBus)
 
-	rm.ingestManager.AddRoom(roomID, audioPort, videoPort, room, ctx)
+	rm.ingestManager.AddRoom(roomID, audioPort, videoPort, room, room.SetVMReady, ctx)
 
 	go func() {
 		if err := rm.vmService.CreateVM(ctx, roomID, audioPort, videoPort); err != nil {
@@ -109,7 +109,7 @@ func (rm *RoomManager) GetRooms() []RoomInfo {
 			Name:    r.Name,
 			Creator: r.Creator,
 			Viewers: r.MemberCount(),
-			IsLive:  true,
+			IsLive:  r.IsVMReady(),
 		})
 	}
 	return rooms

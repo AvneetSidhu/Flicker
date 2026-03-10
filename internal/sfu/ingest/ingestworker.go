@@ -21,7 +21,9 @@ type ingestWorker struct {
 	videoPort int
 	audioPort int
 
-	room Room
+	room    Room
+	onReady func()
+	once    sync.Once
 
 	audioListener net.PacketConn
 	videoListener net.PacketConn
@@ -94,7 +96,12 @@ func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType 
 					Time:   pkt.Timestamp,
 				}
 
-				w.room.Broadcast(wrappedPkt, packetType)
+				w.once.Do(func() {
+				if w.onReady != nil {
+					w.onReady()
+				}
+			})
+			w.room.Broadcast(wrappedPkt, packetType)
 			}
 		}
 	}()

@@ -30,6 +30,16 @@ type Room struct {
 	membersSnapshot   atomic.Value
 	CurrentController string
 	inputForward      chan<- *control.CommandEvent
+	vmReady           atomic.Bool
+}
+
+func (r *Room) SetVMReady() {
+	r.vmReady.Store(true)
+	r.logger.Info("VM ingest ready", "roomID", r.RoomID)
+}
+
+func (r *Room) IsVMReady() bool {
+	return r.vmReady.Load()
 }
 
 // use atomic.Value for members snapshot / create on write
