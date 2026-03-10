@@ -61,15 +61,22 @@ const VideoRoom = () => {
 
   const handleSignalMessage = useCallback(
     async (msg: any) => {
-      if (!pcRef.current) return;
+      console.log("[Signal] received message type:", msg.type);
+      if (!pcRef.current) {
+        console.warn("[Signal] no PeerConnection yet, ignoring", msg.type);
+        return;
+      }
       if (msg.type === "answer" && msg.payload?.sdp) {
+        console.log("[Signal] setting remote description (answer)");
         const desc = new RTCSessionDescription({
           type: "answer",
           sdp: msg.payload.sdp,
         });
         await pcRef.current.setRemoteDescription(desc);
+        console.log("[Signal] remote description set");
       }
       if (msg.type === "ice-candidate" && msg.payload?.candidate) {
+        console.log("[Signal] adding remote ICE candidate", msg.payload.candidate);
         try {
           await pcRef.current.addIceCandidate({
             candidate: msg.payload.candidate,
@@ -77,7 +84,7 @@ const VideoRoom = () => {
             sdpMLineIndex: msg.payload.sdpMLineIndex,
           });
         } catch (err) {
-          console.error("Error adding ICE candidate", err);
+          console.error("[Signal] error adding ICE candidate", err);
         }
       }
     },
@@ -86,12 +93,14 @@ const VideoRoom = () => {
 
   const startWebRTC = useCallback(async () => {
     if (!roomId || pcRef.current) return;
+    console.log("[WebRTC] creating PeerConnection");
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("[WebRTC] local ICE candidate", event.candidate.candidate);
         sendJson({
           type: "ice-candidate",
           payload: {
@@ -100,10 +109,33 @@ const VideoRoom = () => {
             sdpMLineIndex: event.candidate.sdpMLineIndex,
           },
         });
+      } else {
+        console.log("[WebRTC] local ICE gathering complete");
       }
     };
 
+    pc.onicecandidateerror = (event) => {
+      console.warn("[WebRTC] ICE candidate error", event);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("[WebRTC] ICE connection state:", pc.iceConnectionState);
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log("[WebRTC] ICE gathering state:", pc.iceGatheringState);
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log("[WebRTC] signaling state:", pc.signalingState);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log("[WebRTC] connection state:", pc.connectionState);
+    };
+
     pc.ontrack = (event) => {
+      console.log("[WebRTC] ontrack fired", event.track.kind, event.track.id);
       if (!remoteStreamRef.current) {
         remoteStreamRef.current = new MediaStream();
       }
@@ -116,6 +148,7 @@ const VideoRoom = () => {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    console.log("[WebRTC] local description set, sending offer");
 
     sendJson({
       type: "join-room",
