@@ -66,19 +66,12 @@ func loadConfig() (*vmagent.Config, error) {
 }
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
-	gstreamerCommand := `
-        audiotestsrc wave=sine ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0 
-        rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT 
-        
-        videotestsrc pattern=ball ! video/x-raw,width=640,height=480,framerate=30/1 ! vp8enc error-resilient=partitions keyframe-max-dist=10 auto-alt-ref=true cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1 
-        rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT 
-        
-        rtpbin name=rtpbin`
-
-	fullShellCommand := fmt.Sprintf(
-		"/usr/bin/gst-launch-1.0 -v %s",
-		gstreamerCommand,
-	)
+	fullShellCommand := "/usr/bin/gst-launch-1.0 -v" +
+		" audiotestsrc wave=sine ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0" +
+		" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
+		" videotestsrc pattern=ball ! video/x-raw,width=640,height=480,framerate=30/1 ! vp8enc error-resilient=partitions keyframe-max-dist=10 auto-alt-ref=true cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1" +
+		" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
+		" rtpbin name=rtpbin"
 
 	cmd := exec.CommandContext(
 		ctx,
