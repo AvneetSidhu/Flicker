@@ -11,21 +11,13 @@ interface Watcher {
   joinedAt: Date;
 }
 
-const mockWatchers: Watcher[] = [
-  { id: "1", name: "Alice", joinedAt: new Date(Date.now() - 300000) },
-  { id: "2", name: "Bob", joinedAt: new Date(Date.now() - 180000) },
-  { id: "3", name: "Charlie", joinedAt: new Date(Date.now() - 120000) },
-  { id: "4", name: "Diana", joinedAt: new Date(Date.now() - 60000) },
-  { id: "5", name: "Eve", joinedAt: new Date(Date.now() - 30000) },
-];
-
 const VideoRoom = () => {
   const navigate = useNavigate();
   const { roomId } = useParams();
   const [displayName, setDisplayName] = useState("");
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState([75]);
-  const [watchers, setWatchers] = useState<Watcher[]>(mockWatchers);
+  const [watchers, setWatchers] = useState<Watcher[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
@@ -46,18 +38,14 @@ const VideoRoom = () => {
       return;
     }
     setDisplayName(name);
+    setWatchers([{ id: "current", name, joinedAt: new Date() }]);
+  }, [navigate]);
 
-    if (!isConnected && !isConnecting) {
-      connect(name);
+  useEffect(() => {
+    if (!isConnected && !isConnecting && displayName) {
+      connect(displayName);
     }
-    
-    // Add current user to watchers
-    setWatchers(prev => [...prev, {
-      id: "current",
-      name: name,
-      joinedAt: new Date()
-    }]);
-  }, [navigate, isConnected, isConnecting, connect]);
+  }, [isConnected, isConnecting, displayName, connect]);
 
   useEffect(() => {
     if (videoRef.current) {
