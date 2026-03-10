@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -150,37 +149,9 @@ func (s *Session) defineCallbacks(pc *webrtc.PeerConnection, ctx context.Context
 		s.dataChan = d
 	})
 
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		s.Logger.Debug("New ICE candidate found", slog.String("user", s.DisplayName))
-		if c == nil {
-			return
-		}
-		candidateJSON := c.ToJSON()
-		candidateJSONStr, candidateJsonErr := json.Marshal(candidateJSON)
-
-		if candidateJsonErr != nil || candidateJSON.SDPMid == nil || *candidateJSON.SDPMid == "" || candidateJSON.SDPMLineIndex == nil {
-			s.Logger.Debug("Skipping ICE candidate with missing or empty sdpMid / sdpMLineIndex",
-				slog.Any("candidate", candidateJSON),
-				slog.String("error", fmt.Sprint(candidateJsonErr)))
-		}
-
-		signalMsg, wsMessageJsonErr := json.Marshal(WSMessage{
-			Type:    "ice-candidate",
-			Payload: candidateJSONStr,
-			UserID:  s.DisplayName,
-		})
-		if wsMessageJsonErr != nil {
-			s.Logger.Error("Error marshalling ICE candidate", "err", wsMessageJsonErr)
-			return
-		}
-
-		select {
-		case s.SendChan <- signalMsg:
-			s.Logger.Debug("Sent ICE candidate", slog.String("candidate", candidateJSON.Candidate), slog.String("user", s.DisplayName))
-		default:
-			s.Logger.Warn("Send channel is full, dropping ICE candidate message")
-		}
-	})
+	// ICE candidates are not trickled — we wait for full gathering before sending
+	// the answer (via GatheringCompletePromise), so all candidates are already
+	// embedded in the answer SDP.
 }
 
 func toNTPTime(t time.Time) uint64 {
