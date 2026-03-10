@@ -21,6 +21,7 @@ const VideoRoom = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const webrtcStartingRef = useRef(false);
   const {
     socket,
     isConnected,
@@ -99,10 +100,11 @@ const VideoRoom = () => {
         if (res.ok) {
           const rooms: { id: string; isLive: boolean }[] = await res.json();
           const room = rooms.find((r) => r.id === roomId);
+          console.log(`[Poll] attempt ${i + 1}: room=${JSON.stringify(room)}`);
           if (room?.isLive) return true;
         }
-      } catch {
-        // ignore fetch errors, keep polling
+      } catch (err) {
+        console.warn("[Poll] fetch error:", err);
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
@@ -110,7 +112,8 @@ const VideoRoom = () => {
   }, [roomId]);
 
   const startWebRTC = useCallback(async () => {
-    if (!roomId || pcRef.current) return;
+    if (!roomId || pcRef.current || webrtcStartingRef.current) return;
+    webrtcStartingRef.current = true;
     console.log("[WebRTC] waiting for VM to be live...");
     const live = await waitForRoomLive();
     if (!live) {
