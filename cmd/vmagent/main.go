@@ -66,12 +66,13 @@ func loadConfig() (*vmagent.Config, error) {
 }
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
-	// Run GStreamer as the desktop user who owns the X display so ximagesrc
-	// has access to the X session. su - loads their full login environment
-	// (including ~/.Xauthority). All config values are inlined so the
-	// subshell needs no inherited environment variables.
+	// Wait for the X socket before launching GStreamer — the vmagent may start
+	// before the desktop session is ready. Then run as the display owner so
+	// ximagesrc can authenticate. All config values are inlined.
 	fullShellCommand := fmt.Sprintf(
-		"XUSER=$(stat -c %%U /tmp/.X11-unix/X0)"+
+		"until [ -S /tmp/.X11-unix/X0 ]; do sleep 2; done"+
+			" && sleep 3"+ // give xhost +local: time to run
+			" && XUSER=$(stat -c %%U /tmp/.X11-unix/X0)"+
 			" && su - \"$XUSER\" -c "+
 			"'DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority /usr/bin/gst-launch-1.0 -v"+
 			" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 mtu=1200 ! queue ! rtpbin.send_rtp_sink_0"+
