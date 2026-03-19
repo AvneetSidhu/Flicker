@@ -80,6 +80,9 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 		"-d", domainName,
 		"--upload", fmt.Sprintf("%s:/etc/vmagent.env", envFile.Name()),
 		"--chmod", "0644:/etc/vmagent.env",
+		// Allow local processes (e.g. the vmagent systemd service) to connect
+		// to the X display without needing an Xauthority cookie.
+		"--run-command", "echo 'xhost +local:' > /etc/X11/Xsession.d/90-xhost-local && chmod +x /etc/X11/Xsession.d/90-xhost-local",
 	)
 	virtCustomize.Env = append(os.Environ(), "LIBGUESTFS_BACKEND=direct")
 	if out, err := virtCustomize.CombinedOutput(); err != nil {
