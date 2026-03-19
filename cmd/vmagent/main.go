@@ -55,11 +55,6 @@ func loadConfig() (*vmagent.Config, error) {
 		return nil, fmt.Errorf("missing VIDEO_PORT")
 	}
 
-	display := os.Getenv("DISPLAY")
-	if display == "" {
-		display = ":0"
-	}
-
 	return &vmagent.Config{
 		SFUForwardAddr: sfuForwardAddr,
 		AvListenPort:   listenPortStr,
@@ -67,25 +62,23 @@ func loadConfig() (*vmagent.Config, error) {
 		RoomID:         roomID,
 		AudioPort:      audioPort,
 		VideoPort:      videoPort,
-		Display:        display,
 	}, nil
 }
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
-	fullShellCommand := fmt.Sprintf(
-		// Grant X access to local connections (fails silently if X is not up yet).
-		"DISPLAY=%s xhost +local: 2>/dev/null || true && "+
-			// Pick up whatever Xauthority file exists on the system.
-			"XAUTHORITY=$(ls /root/.Xauthority /home/*/.Xauthority 2>/dev/null | head -1) "+
-			"DISPLAY=%s "+
-			"/usr/bin/gst-launch-1.0 -v"+
-			" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0"+
-			" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT"+
-			" ximagesrc display-name=%s use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1"+
-			" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT"+
-			" rtpbin name=rtpbin",
-		cfg.Display, cfg.Display, cfg.Display,
-	)
+	// Locate the Xauthority cookie for the :0 display so ximagesrc can
+	// authenticate even when running as a different user (e.g. root via systemd).
+	// We also call xhost to open local connections as a belt-and-suspenders measure.
+	fullShellCommand := "" +
+		"XAUTHORITY=$(grep -z XAUTHORITY /proc/$(pgrep -x Xorg | head -1)/environ 2>/dev/null | tr '\\0' '\\n' | cut -d= -f2-)" +
+		" ; [ -z \"$XAUTHORITY\" ] && XAUTHORITY=$(ls /home/*/.Xauthority /root/.Xauthority 2>/dev/null | head -1)" +
+		" ; DISPLAY=:0 xhost +local: 2>/dev/null || true" +
+		" ; DISPLAY=:0 XAUTHORITY=$XAUTHORITY /usr/bin/gst-launch-1.0 -v" +
+		" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0" +
+		" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
+		" ximagesrc display-name=:0 use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1" +
+		" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
+		" rtpbin name=rtpbin"
 
 	cmd := exec.CommandContext(
 		ctx,
