@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
@@ -13,6 +14,8 @@ import (
 	"github.com/AvneetSidhu/Flicker/internal/sfu/vm"
 	"github.com/google/uuid"
 )
+
+const emptyRoomTimeout = 2 * time.Minute
 
 // make thread safe
 type RoomManager struct {
@@ -26,7 +29,7 @@ type RoomManager struct {
 }
 
 func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.CommandEvent, ingestManager *ingest.IngestManager, vmService *vm.VMService) *RoomManager {
-	return &RoomManager{
+	rm := &RoomManager{
 		rooms:                  make(map[string]*Room),
 		logger:                 logger,
 		roomsCreatedLifetime:   0,
@@ -34,6 +37,28 @@ func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.
 		controlEventMessageBus: controlEventMessageBus,
 		ingestManager:          ingestManager,
 		vmService:              vmService,
+	}
+	go rm.runEmptyRoomReaper()
+	return rm
+}
+
+func (rm *RoomManager) runEmptyRoomReaper() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		rm.mu.RLock()
+		var toDelete []string
+		for id, r := range rm.rooms {
+			if r.EmptyDuration() >= emptyRoomTimeout {
+				toDelete = append(toDelete, id)
+			}
+		}
+		rm.mu.RUnlock()
+
+		for _, id := range toDelete {
+			rm.logger.Info("reaping empty room", "roomID", id)
+			rm.DeleteRoom(id)
+		}
 	}
 }
 

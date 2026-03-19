@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -119,13 +120,85 @@ func (s *VMService) DestroyVM(roomID string) error {
 	return nil
 }
 
-// cleanupDomain force-stops a domain and removes it along with its storage.
-// Errors are logged but not returned — best-effort cleanup.
+// cleanupDomain force-stops a domain, removes snapshots, undefines it, and
+// deletes its disk images. Errors are logged but not returned — best-effort.
 func (s *VMService) cleanupDomain(domainName string) {
-	// destroy is a force-stop; ignore error if the VM is already stopped.
-	exec.Command("virsh", "-c", "qemu:///system", "destroy", domainName).Run()
-
-	if out, err := exec.Command("virsh", "-c", "qemu:///system", "undefine", domainName, "--remove-all-storage").CombinedOutput(); err != nil {
-		s.logger.Error("virsh undefine failed", "domain", domainName, "err", err, "out", string(out))
+	virsh := func(args ...string) (string, error) {
+		out, err := exec.Command("virsh", append([]string{"-c", "qemu:///system"}, args...)...).CombinedOutput()
+		return string(out), err
 	}
+
+	// Force-stop if running.
+	if out, err := virsh("domstate", domainName); err == nil {
+		if strings.Contains(strings.ToLower(out), "running") {
+			if _, err := virsh("destroy", domainName); err != nil {
+				s.logger.Warn("virsh destroy failed", "domain", domainName, "err", err)
+			}
+		}
+	}
+
+	// Collect disk paths before undefining.
+	diskPaths := s.collectDiskPaths(domainName)
+	s.logger.Info("disk paths to remove", "domain", domainName, "disks", diskPaths)
+
+	// Delete snapshot metadata.
+	if snapOut, err := virsh("snapshot-list", domainName, "--name"); err == nil {
+		for _, snap := range strings.Split(strings.TrimSpace(snapOut), "\n") {
+			snap = strings.TrimSpace(snap)
+			if snap == "" {
+				continue
+			}
+			virsh("snapshot-delete", domainName, snap, "--metadata") //nolint
+		}
+	}
+
+	// Undefine — try with all cleanup flags first, fall back to plain undefine.
+	if _, err := virsh("undefine", domainName, "--nvram", "--managed-save", "--snapshots-metadata"); err != nil {
+		if _, err2 := virsh("undefine", domainName); err2 != nil {
+			s.logger.Error("virsh undefine failed", "domain", domainName, "err", err2)
+		}
+	}
+
+	// Remove disk image files.
+	for _, disk := range diskPaths {
+		if err := os.Remove(disk); err != nil && !os.IsNotExist(err) {
+			s.logger.Warn("failed to remove disk image", "path", disk, "err", err)
+		} else {
+			s.logger.Info("removed disk image", "path", disk)
+		}
+	}
+}
+
+// collectDiskPaths returns the file paths of all disk images attached to the domain.
+func (s *VMService) collectDiskPaths(domainName string) []string {
+	out, err := exec.Command("virsh", "-c", "qemu:///system", "domblklist", domainName, "--details").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		// --details format: Type Device Target Source
+		// keep rows where type=file, device=disk
+		if len(fields) >= 4 && fields[1] == "disk" && strings.HasPrefix(fields[3], "/") {
+			paths = append(paths, fields[3])
+		}
+	}
+
+	// Fallback: plain domblklist without --details
+	if len(paths) == 0 {
+		out2, err := exec.Command("virsh", "-c", "qemu:///system", "domblklist", domainName).CombinedOutput()
+		if err == nil {
+			lines := strings.Split(string(out2), "\n")
+			for _, line := range lines[2:] { // skip header rows
+				fields := strings.Fields(line)
+				if len(fields) >= 2 && strings.HasPrefix(fields[1], "/") {
+					paths = append(paths, fields[1])
+				}
+			}
+		}
+	}
+
+	return paths
 }

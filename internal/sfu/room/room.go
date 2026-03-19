@@ -3,7 +3,9 @@ package room
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
@@ -31,6 +33,9 @@ type Room struct {
 	CurrentController string
 	inputForward      chan<- *control.CommandEvent
 	vmReady           atomic.Bool
+
+	emptyMu sync.Mutex
+	emptyAt time.Time // zero means the room currently has members
 }
 
 func (r *Room) SetVMReady() {
@@ -51,6 +56,7 @@ func NewRoom(logger *slog.Logger, roomID string, name string, creator string, in
 		CurrentController: "",
 		inputForward:      inputForward,
 		logger:            logger,
+		emptyAt:           time.Now(), // starts empty
 	}
 
 	r.membersSnapshot.Store([]*session.Session{})
@@ -62,6 +68,10 @@ func (r *Room) AddMember(user *session.Session) bool {
 	newList := append([]*session.Session{}, oldList...)
 	newList = append(newList, user)
 	r.membersSnapshot.Store(newList)
+
+	r.emptyMu.Lock()
+	r.emptyAt = time.Time{} // room has members — clear the empty timer
+	r.emptyMu.Unlock()
 	return true
 }
 
@@ -76,7 +86,26 @@ func (r *Room) RemoveMember(user *session.Session) bool {
 	}
 
 	r.membersSnapshot.Store(newList)
+
+	if len(newList) == 0 {
+		r.emptyMu.Lock()
+		if r.emptyAt.IsZero() {
+			r.emptyAt = time.Now()
+		}
+		r.emptyMu.Unlock()
+	}
 	return true
+}
+
+// EmptyDuration returns how long the room has had no members.
+// Returns zero if the room currently has members.
+func (r *Room) EmptyDuration() time.Duration {
+	r.emptyMu.Lock()
+	defer r.emptyMu.Unlock()
+	if r.emptyAt.IsZero() {
+		return 0
+	}
+	return time.Since(r.emptyAt)
 }
 
 func (r *Room) GetMember(userName string) *session.Session {

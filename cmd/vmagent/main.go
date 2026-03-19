@@ -78,6 +78,7 @@ func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logge
 			" && XAUTH=$(cat /proc/\"$XPID\"/environ 2>/dev/null | tr '\\0' '\\n' | grep ^XAUTHORITY= | cut -d= -f2-)"+
 			" && XDG=$(cat /proc/\"$XPID\"/environ 2>/dev/null | tr '\\0' '\\n' | grep ^XDG_RUNTIME_DIR= | cut -d= -f2-)"+
 			" && echo \"vmagent: XUSER=$XUSER XAUTH=$XAUTH XDG=$XDG\""+
+			" && pkill orca 2>/dev/null || true"+
 			" && runuser -u \"$XUSER\" -- env DISPLAY=:0 XAUTHORITY=\"$XAUTH\" XDG_RUNTIME_DIR=\"$XDG\""+
 			" /usr/bin/gst-launch-1.0 -v"+
 			" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 mtu=1200 ! queue ! rtpbin.send_rtp_sink_0"+
