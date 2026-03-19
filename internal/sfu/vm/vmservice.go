@@ -56,7 +56,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 
 	// Write /etc/vmagent.env into the cloned disk while it is still offline.
 	envContent := fmt.Sprintf(
-		"SFU_FORWARD_ADDR=%s\nSFU_GRPC_ADDR=%s:%s\nROOM_ID=%s\nAUDIO_PORT=%d\nVIDEO_PORT=%d\nLISTEN_PORT=5000\n",
+		"SFU_FORWARD_ADDR=%s\nSFU_GRPC_ADDR=%s:%s\nROOM_ID=%s\nAUDIO_PORT=%d\nVIDEO_PORT=%d\nLISTEN_PORT=5000\nDISPLAY=:0\n",
 		s.cfg.SFUHost, s.cfg.SFUHost, s.cfg.GRPCPort, roomID, audioPort, videoPort,
 	)
 
