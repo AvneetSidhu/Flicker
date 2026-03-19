@@ -34,10 +34,8 @@ type Room struct {
 	inputForward      chan<- *control.CommandEvent
 	vmReady           atomic.Bool
 
-	emptyMu   sync.Mutex
-	createdAt time.Time
-	emptyAt   time.Time // zero until the first member joins then leaves
-	hadMember bool      // true once at least one member has joined
+	emptyMu sync.Mutex
+	emptyAt time.Time
 }
 
 func (r *Room) SetVMReady() {
@@ -58,7 +56,7 @@ func NewRoom(logger *slog.Logger, roomID string, name string, creator string, in
 		CurrentController: "",
 		inputForward:      inputForward,
 		logger:            logger,
-		createdAt:         time.Now(),
+		emptyAt:           time.Now(),
 	}
 
 	r.membersSnapshot.Store([]*session.Session{})
@@ -72,8 +70,7 @@ func (r *Room) AddMember(user *session.Session) bool {
 	r.membersSnapshot.Store(newList)
 
 	r.emptyMu.Lock()
-	r.hadMember = true
-	r.emptyAt = time.Time{} // room has members — clear the empty timer
+	r.emptyAt = time.Time{}
 	r.emptyMu.Unlock()
 	return true
 }
