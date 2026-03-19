@@ -72,12 +72,20 @@ func loadConfig() (*vmagent.Config, error) {
 }
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
-	fullShellCommand := "/usr/bin/gst-launch-1.0 -v" +
-		" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0" +
-		" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
-		fmt.Sprintf(" ximagesrc display-name=%s use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1", cfg.Display) +
-		" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
-		" rtpbin name=rtpbin"
+	fullShellCommand := fmt.Sprintf(
+		// Grant X access to local connections (fails silently if X is not up yet).
+		"DISPLAY=%s xhost +local: 2>/dev/null || true && "+
+			// Pick up whatever Xauthority file exists on the system.
+			"XAUTHORITY=$(ls /root/.Xauthority /home/*/.Xauthority 2>/dev/null | head -1) "+
+			"DISPLAY=%s "+
+			"/usr/bin/gst-launch-1.0 -v"+
+			" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0"+
+			" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT"+
+			" ximagesrc display-name=%s use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1"+
+			" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT"+
+			" rtpbin name=rtpbin",
+		cfg.Display, cfg.Display, cfg.Display,
+	)
 
 	cmd := exec.CommandContext(
 		ctx,
