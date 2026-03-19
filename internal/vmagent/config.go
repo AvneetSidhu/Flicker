@@ -7,4 +7,5 @@ type Config struct {
 	RoomID         string //for tagging packets
 	AudioPort      string
 	VideoPort      string
+	Display        string // X11 display for ximagesrc (e.g. :0)
 }

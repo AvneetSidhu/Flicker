@@ -55,6 +55,11 @@ func loadConfig() (*vmagent.Config, error) {
 		return nil, fmt.Errorf("missing VIDEO_PORT")
 	}
 
+	display := os.Getenv("DISPLAY")
+	if display == "" {
+		display = ":0"
+	}
+
 	return &vmagent.Config{
 		SFUForwardAddr: sfuForwardAddr,
 		AvListenPort:   listenPortStr,
@@ -62,6 +67,7 @@ func loadConfig() (*vmagent.Config, error) {
 		RoomID:         roomID,
 		AudioPort:      audioPort,
 		VideoPort:      videoPort,
+		Display:        display,
 	}, nil
 }
 
@@ -69,7 +75,7 @@ func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logge
 	fullShellCommand := "/usr/bin/gst-launch-1.0 -v" +
 		" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0" +
 		" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
-		" ximagesrc display-name=$DISPLAY use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1" +
+		fmt.Sprintf(" ximagesrc display-name=%s use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1", cfg.Display) +
 		" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
 		" rtpbin name=rtpbin"
 
