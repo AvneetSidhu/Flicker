@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { ArrowLeft, Volume2, VolumeX, Maximize, Users } from "lucide-react";
+import { ArrowLeft, Volume2, VolumeX, Maximize, Users, Power, Loader2 } from "lucide-react";
 import { useWebSocket } from "@/context/websocketcontext";
 
 interface Watcher {
@@ -11,6 +11,8 @@ interface Watcher {
   joinedAt: Date;
 }
 
+type VMState = "idle" | "connecting" | "connected" | "stopping";
+
 const VideoRoom = () => {
   const navigate = useNavigate();
   const { roomId } = useParams();
@@ -18,6 +20,8 @@ const VideoRoom = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState([75]);
   const [watchers, setWatchers] = useState<Watcher[]>([]);
+  const [vmState, setVMState] = useState<VMState>("idle");
+  const [isStreaming, setIsStreaming] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
@@ -60,49 +64,40 @@ const VideoRoom = () => {
     }
   }, []);
 
-  const handleSignalMessage = useCallback(
-    async (msg: any) => {
-      console.log("[Signal] received message type:", msg.type);
-      if (!pcRef.current) {
-        console.warn("[Signal] no PeerConnection yet, ignoring", msg.type);
-        return;
-      }
-      if (msg.type === "answer" && msg.payload?.sdp) {
-        console.log("[Signal] setting remote description (answer)");
-        const desc = new RTCSessionDescription({
-          type: "answer",
-          sdp: msg.payload.sdp,
+  const handleSignalMessage = useCallback(async (msg: any) => {
+    console.log("[Signal] received message type:", msg.type);
+    if (!pcRef.current) {
+      console.warn("[Signal] no PeerConnection yet, ignoring", msg.type);
+      return;
+    }
+    if (msg.type === "answer" && msg.payload?.sdp) {
+      const desc = new RTCSessionDescription({ type: "answer", sdp: msg.payload.sdp });
+      await pcRef.current.setRemoteDescription(desc);
+    }
+    if (msg.type === "ice-candidate" && msg.payload?.candidate) {
+      try {
+        await pcRef.current.addIceCandidate({
+          candidate: msg.payload.candidate,
+          sdpMid: msg.payload.sdpMid,
+          sdpMLineIndex: msg.payload.sdpMLineIndex,
         });
-        await pcRef.current.setRemoteDescription(desc);
-        console.log("[Signal] remote description set");
+      } catch (err) {
+        console.error("[Signal] error adding ICE candidate", err);
       }
-      if (msg.type === "ice-candidate" && msg.payload?.candidate) {
-        console.log("[Signal] adding remote ICE candidate", msg.payload.candidate);
-        try {
-          await pcRef.current.addIceCandidate({
-            candidate: msg.payload.candidate,
-            sdpMid: msg.payload.sdpMid,
-            sdpMLineIndex: msg.payload.sdpMLineIndex,
-          });
-        } catch (err) {
-          console.error("[Signal] error adding ICE candidate", err);
-        }
-      }
-    },
-    []
-  );
+    }
+  }, []);
 
   const startWebRTC = useCallback(async () => {
     if (!roomId || pcRef.current || webrtcStartingRef.current) return;
     webrtcStartingRef.current = true;
-    console.log("[WebRTC] creating PeerConnection");
+    setVMState("connecting");
+
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("[WebRTC] local ICE candidate", event.candidate.candidate);
         sendJson({
           type: "ice-candidate",
           payload: {
@@ -111,29 +106,21 @@ const VideoRoom = () => {
             sdpMLineIndex: event.candidate.sdpMLineIndex,
           },
         });
-      } else {
-        console.log("[WebRTC] local ICE gathering complete");
       }
-    };
-
-    pc.onicecandidateerror = (event) => {
-      console.warn("[WebRTC] ICE candidate error", event);
     };
 
     pc.oniceconnectionstatechange = () => {
       console.log("[WebRTC] ICE connection state:", pc.iceConnectionState);
     };
 
-    pc.onicegatheringstatechange = () => {
-      console.log("[WebRTC] ICE gathering state:", pc.iceGatheringState);
-    };
-
-    pc.onsignalingstatechange = () => {
-      console.log("[WebRTC] signaling state:", pc.signalingState);
-    };
-
     pc.onconnectionstatechange = () => {
       console.log("[WebRTC] connection state:", pc.connectionState);
+      if (pc.connectionState === "connected") {
+        setVMState("connected");
+      } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+        setVMState("idle");
+        webrtcStartingRef.current = false;
+      }
     };
 
     pc.ontrack = (event) => {
@@ -150,29 +137,45 @@ const VideoRoom = () => {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    console.log("[WebRTC] local description set, sending offer");
 
-    sendJson({
-      type: "join-room",
-      payload: { roomId },
-    });
-
-    sendJson({
-      type: "offer",
-      payload: { sdp: offer.sdp },
-    });
+    sendJson({ type: "join-room", payload: { roomId } });
+    sendJson({ type: "offer", payload: { sdp: offer.sdp } });
 
     pcRef.current = pc;
   }, [attachStream, roomId, sendJson]);
 
+  const stopVM = useCallback(async () => {
+    if (!roomId) return;
+    setVMState("stopping");
+
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    remoteStreamRef.current = null;
+    webrtcStartingRef.current = false;
+    setIsStreaming(false);
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    try {
+      await fetch(`/rooms/${roomId}`, { method: "DELETE" });
+    } catch (err) {
+      console.error("[VM] failed to delete room", err);
+    }
+
+    navigate("/rooms");
+  }, [roomId, navigate]);
+
+  // Register signal listener once connected — do NOT auto-start WebRTC
   useEffect(() => {
     if (!socket || !isConnected) return;
     addMessageListener(handleSignalMessage);
-    startWebRTC();
     return () => {
       removeMessageListener(handleSignalMessage);
     };
-  }, [socket, isConnected, addMessageListener, removeMessageListener, handleSignalMessage, startWebRTC]);
+  }, [socket, isConnected, addMessageListener, removeMessageListener, handleSignalMessage]);
 
   const toggleMute = () => {
     if (videoRef.current) {
@@ -191,10 +194,6 @@ const VideoRoom = () => {
     }
   };
 
-  const handleBack = () => {
-    navigate("/rooms");
-  };
-
   useEffect(() => {
     return () => {
       if (pcRef.current) {
@@ -205,44 +204,116 @@ const VideoRoom = () => {
     };
   }, []);
 
+  const canLaunch = isConnected && vmState === "idle";
+
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="h-screen overflow-hidden bg-background flex flex-col">
       {/* Header */}
-      <header className="border-b border-border backdrop-blur-xl bg-background/80 z-50">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
+      <header className="shrink-0 border-b border-border backdrop-blur-xl bg-background/80 z-50">
+        <div className="px-6 py-3 flex items-center justify-between">
           <Button
             variant="outline"
             size="sm"
-            onClick={handleBack}
+            onClick={() => navigate("/rooms")}
             className="border-border hover:bg-secondary"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Rooms
+            Back
           </Button>
-          
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Users className="w-4 h-4" />
-            <span>{watchers.length} watching</span>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-muted-foreground text-sm">
+              <Users className="w-4 h-4" />
+              <span>{watchers.length} watching</span>
+            </div>
+
+            {/* Launch / Stop button */}
+            {vmState === "idle" && (
+              <Button
+                size="sm"
+                onClick={startWebRTC}
+                disabled={!canLaunch}
+                className="gap-2"
+              >
+                <Power className="w-4 h-4" />
+                Launch VM
+              </Button>
+            )}
+            {vmState === "connecting" && (
+              <Button size="sm" disabled className="gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Connecting...
+              </Button>
+            )}
+            {vmState === "connected" && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={stopVM}
+                className="gap-2"
+              >
+                <Power className="w-4 h-4" />
+                Stop VM
+              </Button>
+            )}
+            {vmState === "stopping" && (
+              <Button size="sm" variant="destructive" disabled className="gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Stopping...
+              </Button>
+            )}
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Video Section */}
-        <div className="flex-1 flex flex-col p-6 gap-4">
-          <div className="flex-1 relative rounded-2xl overflow-hidden bg-black shadow-card">
+        <div className="flex-1 flex flex-col p-4 gap-3 min-w-0">
+          {/* Video */}
+          <div className="flex-1 relative rounded-2xl overflow-hidden bg-black min-h-0">
+            {/* Idle */}
+            {vmState === "idle" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Power className="w-10 h-10 opacity-30" />
+                <p className="text-sm">Press Launch VM to start the stream</p>
+              </div>
+            )}
+
+            {/* WebRTC negotiating */}
+            {vmState === "connecting" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Loader2 className="w-10 h-10 animate-spin opacity-50" />
+                <p className="text-sm">Connecting...</p>
+              </div>
+            )}
+
+            {/* Connected but VM still booting — no frames yet */}
+            {vmState === "connected" && !isStreaming && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                <div className="relative flex items-center justify-center">
+                  <div className="w-16 h-16 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+                  <Power className="absolute w-6 h-6 text-primary" />
+                </div>
+                <div className="text-center space-y-1">
+                  <p className="text-sm font-medium text-foreground">VM is starting up</p>
+                  <p className="text-xs text-muted-foreground">Waiting for stream...</p>
+                </div>
+              </div>
+            )}
+
             <video
               ref={videoRef}
               className="w-full h-full object-contain"
               autoPlay
               playsInline
               muted={isMuted}
+              onPlaying={() => setIsStreaming(true)}
             />
           </div>
 
-          {/* Video Controls */}
-          <div className="backdrop-blur-xl bg-card/50 border border-border rounded-2xl p-4">
+          {/* Controls */}
+          <div className="shrink-0 backdrop-blur-xl bg-card/50 border border-border rounded-2xl px-4 py-3">
             <div className="flex items-center gap-6">
               <Button
                 variant="outline"
@@ -250,11 +321,7 @@ const VideoRoom = () => {
                 onClick={toggleMute}
                 className="border-border hover:bg-secondary shrink-0"
               >
-                {isMuted ? (
-                  <VolumeX className="w-5 h-5" />
-                ) : (
-                  <Volume2 className="w-5 h-5" />
-                )}
+                {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
               </Button>
 
               <div className="flex-1 flex items-center gap-3">
@@ -285,33 +352,31 @@ const VideoRoom = () => {
         </div>
 
         {/* Watchers Sidebar */}
-        <aside className="w-80 border-l border-border backdrop-blur-xl bg-card/30 p-6 overflow-y-auto">
-          <div className="mb-6">
-            <h2 className="text-xl font-bold mb-1">Watchers</h2>
+        <aside className="w-72 shrink-0 border-l border-border backdrop-blur-xl bg-card/30 flex flex-col overflow-hidden">
+          <div className="p-5 border-b border-border shrink-0">
+            <h2 className="text-lg font-bold mb-0.5">Watchers</h2>
             <p className="text-sm text-muted-foreground">
-              {watchers.length} {watchers.length === 1 ? 'person' : 'people'} watching
+              {watchers.length} {watchers.length === 1 ? "person" : "people"} watching
             </p>
           </div>
 
-          <div className="space-y-2">
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {watchers.map((watcher) => (
               <div
                 key={watcher.id}
-                className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/50 hover:bg-secondary transition-colors"
+                className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/50"
               >
-                <div className="w-10 h-10 rounded-full bg-gradient-primary flex items-center justify-center text-primary-foreground font-semibold shadow-glow">
+                <div className="w-9 h-9 rounded-full bg-gradient-primary flex items-center justify-center text-primary-foreground font-semibold text-sm shrink-0">
                   {watcher.name[0].toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">
+                  <p className="font-medium text-sm truncate">
                     {watcher.name}
                     {watcher.id === "current" && (
                       <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                     )}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {getTimeAgo(watcher.joinedAt)}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{getTimeAgo(watcher.joinedAt)}</p>
                 </div>
               </div>
             ))}
@@ -324,7 +389,6 @@ const VideoRoom = () => {
 
 function getTimeAgo(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  
   if (seconds < 60) return "Just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
