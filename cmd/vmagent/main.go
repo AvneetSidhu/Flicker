@@ -66,20 +66,22 @@ func loadConfig() (*vmagent.Config, error) {
 }
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
-	// Wait for the X socket before launching GStreamer — the vmagent may start
-	// before the desktop session is ready. Then run as the display owner so
-	// ximagesrc can authenticate. All config values are inlined.
+	// Wait for X, find the real XAUTHORITY from the desktop user's running
+	// processes (more reliable than assuming ~/.Xauthority since display
+	// managers like GDM write to a different path), then launch GStreamer.
 	fullShellCommand := fmt.Sprintf(
 		"until [ -S /tmp/.X11-unix/X0 ]; do sleep 2; done"+
-			" && sleep 3"+ // give xhost +local: time to run
+			" && sleep 3"+
 			" && XUSER=$(stat -c %%U /tmp/.X11-unix/X0)"+
-			" && su - \"$XUSER\" -c "+
-			"'DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority /usr/bin/gst-launch-1.0 -v"+
+			" && XAUTH=$(cat /proc/$(pgrep -u \"$XUSER\" | head -1)/environ 2>/dev/null | tr '\\0' '\\n' | grep ^XAUTHORITY= | cut -d= -f2-)"+
+			" && XAUTH=${XAUTH:-/home/\"$XUSER\"/.Xauthority}"+
+			" && echo \"vmagent: XUSER=$XUSER XAUTH=$XAUTH\""+
+			" && DISPLAY=:0 XAUTHORITY=\"$XAUTH\" /usr/bin/gst-launch-1.0 -v"+
 			" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 mtu=1200 ! queue ! rtpbin.send_rtp_sink_0"+
 			" rtpbin.send_rtp_src_0 ! queue ! udpsink host=%s port=%s"+
 			" ximagesrc display-name=:0 use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! queue ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 mtu=1200 ! queue ! rtpbin.send_rtp_sink_1"+
 			" rtpbin.send_rtp_src_1 ! queue ! udpsink host=%s port=%s"+
-			" rtpbin name=rtpbin'",
+			" rtpbin name=rtpbin",
 		cfg.SFUForwardAddr, cfg.AudioPort,
 		cfg.SFUForwardAddr, cfg.VideoPort,
 	)
