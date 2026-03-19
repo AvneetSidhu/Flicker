@@ -66,19 +66,18 @@ func loadConfig() (*vmagent.Config, error) {
 }
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
-	// Locate the Xauthority cookie for the :0 display so ximagesrc can
-	// authenticate even when running as a different user (e.g. root via systemd).
-	// We also call xhost to open local connections as a belt-and-suspenders measure.
+	// Find the user who owns the X display socket and run GStreamer as them,
+	// so ximagesrc can authenticate with the X server.
 	fullShellCommand := "" +
-		"XAUTHORITY=$(grep -z XAUTHORITY /proc/$(pgrep -x Xorg | head -1)/environ 2>/dev/null | tr '\\0' '\\n' | cut -d= -f2-)" +
-		" ; [ -z \"$XAUTHORITY\" ] && XAUTHORITY=$(ls /home/*/.Xauthority /root/.Xauthority 2>/dev/null | head -1)" +
-		" ; DISPLAY=:0 xhost +local: 2>/dev/null || true" +
-		" ; DISPLAY=:0 XAUTHORITY=$XAUTHORITY /usr/bin/gst-launch-1.0 -v" +
+		"XUSER=$(stat -c %U /tmp/.X11-unix/X0)" +
+		" ; su -c '" +
+		"DISPLAY=:0 /usr/bin/gst-launch-1.0 -v" +
 		" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 ! rtpbin.send_rtp_sink_0" +
 		" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
 		" ximagesrc display-name=:0 use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 ! rtpbin.send_rtp_sink_1" +
 		" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
-		" rtpbin name=rtpbin"
+		" rtpbin name=rtpbin" +
+		"' \"$XUSER\""
 
 	cmd := exec.CommandContext(
 		ctx,
