@@ -67,10 +67,10 @@ func loadConfig() (*vmagent.Config, error) {
 
 func spawnGStreamer(ctx context.Context, cfg *vmagent.Config, logger *slog.Logger) error {
 	fullShellCommand := "DISPLAY=:0 /usr/bin/gst-launch-1.0 -v" +
-		" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 mtu=1200 ! rtpbin.send_rtp_sink_0" +
-		" rtpbin.send_rtp_src_0 ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
-		" ximagesrc display-name=:0 use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 mtu=1200 ! rtpbin.send_rtp_sink_1" +
-		" rtpbin.send_rtp_src_1 ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
+		" pulsesrc ! audio/x-raw,rate=48000,channels=2 ! audioconvert ! opusenc bitrate=32000 ! rtpopuspay pt=111 mtu=1200 ! queue ! rtpbin.send_rtp_sink_0" +
+		" rtpbin.send_rtp_src_0 ! queue ! udpsink host=$SFU_IP port=$AUDIO_RTP_PORT" +
+		" ximagesrc display-name=:0 use-damage=0 ! video/x-raw,framerate=30/1 ! videoconvert ! queue ! vp8enc error-resilient=partitions keyframe-max-dist=10 cpu-used=5 deadline=1 ! rtpvp8pay pt=96 mtu=1200 ! queue ! rtpbin.send_rtp_sink_1" +
+		" rtpbin.send_rtp_src_1 ! queue ! udpsink host=$SFU_IP port=$VIDEO_RTP_PORT" +
 		" rtpbin name=rtpbin"
 
 	cmd := exec.CommandContext(
