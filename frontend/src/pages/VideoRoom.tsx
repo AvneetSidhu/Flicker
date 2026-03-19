@@ -92,35 +92,9 @@ const VideoRoom = () => {
     []
   );
 
-  const waitForRoomLive = useCallback(async (): Promise<boolean> => {
-    if (!roomId) return false;
-    for (let i = 0; i < 60; i++) {
-      try {
-        const res = await fetch("/rooms");
-        if (res.ok) {
-          const rooms: { id: string; isLive: boolean }[] = await res.json();
-          const room = rooms.find((r) => r.id === roomId);
-          console.log(`[Poll] attempt ${i + 1}: room=${JSON.stringify(room)}`);
-          if (room?.isLive) return true;
-        }
-      } catch (err) {
-        console.warn("[Poll] fetch error:", err);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    return false;
-  }, [roomId]);
-
   const startWebRTC = useCallback(async () => {
     if (!roomId || pcRef.current || webrtcStartingRef.current) return;
     webrtcStartingRef.current = true;
-    console.log("[WebRTC] waiting for VM to be live...");
-    const live = await waitForRoomLive();
-    if (!live) {
-      console.warn("[WebRTC] timed out waiting for room to go live");
-      return;
-    }
-    console.log("[WebRTC] room is live, starting WebRTC");
     console.log("[WebRTC] creating PeerConnection");
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -189,7 +163,7 @@ const VideoRoom = () => {
     });
 
     pcRef.current = pc;
-  }, [attachStream, roomId, sendJson, waitForRoomLive]);
+  }, [attachStream, roomId, sendJson]);
 
   useEffect(() => {
     if (!socket || !isConnected) return;
