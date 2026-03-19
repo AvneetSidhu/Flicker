@@ -7,10 +7,17 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
+)
+
+const (
+	pingInterval = 30 * time.Second
+	pongWait     = 60 * time.Second
+	writeWait    = 10 * time.Second
 )
 
 type Room interface {
@@ -97,6 +104,11 @@ func (s *Session) ReadPump(ctx context.Context) {
 		s.CleanUpSession()
 	}()
 	s.Logger.Debug("readPump: started", slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID))
+	s.socketConn.SetReadDeadline(time.Now().Add(pongWait))
+	s.socketConn.SetPongHandler(func(string) error {
+		s.socketConn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 	for {
 
 		select {
@@ -187,16 +199,26 @@ func (s *Session) ReadPump(ctx context.Context) {
 
 func (s *Session) WritePump(ctx context.Context) {
 	s.Logger.Debug("writePump: started", slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID))
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
+		case <-ticker.C:
+			s.socketConn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := s.socketConn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				s.Logger.Error("writePump: ping failed", slog.String("error", err.Error()), slog.String("DisplayName", s.DisplayName))
+				return
+			}
 
 		case message, ok := <-s.SendChan:
 			if !ok {
 				return
 			}
 			s.Logger.Debug("writePump: sending message", slog.Int("length", len(message)), slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID), slog.String("msg", string(message)))
+			s.socketConn.SetWriteDeadline(time.Now().Add(writeWait))
 			writeErr := s.socketConn.WriteMessage(websocket.TextMessage, message)
 			if writeErr != nil {
 				s.Logger.Error("writePump: error writing message", slog.String("error", writeErr.Error()), slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID))
