@@ -108,6 +108,7 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 		json.NewEncoder(w).Encode(roomManager.GetRooms())
 	})
 	http.HandleFunc("/rooms/", func(w http.ResponseWriter, r *http.Request) {
+		logger.Info("DELETE /rooms/ received", "method", r.Method, "path", r.URL.Path)
 		if r.Method != http.MethodDelete {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -117,11 +118,13 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 			http.Error(w, "roomID required", http.StatusBadRequest)
 			return
 		}
+		logger.Info("deleting room", "roomID", roomID)
 		if err := roomManager.DeleteRoom(roomID); err != nil {
 			logger.Error("failed to delete room", "roomID", roomID, "err", err)
 			http.Error(w, "failed to delete room", http.StatusInternalServerError)
 			return
 		}
+		logger.Info("room deleted successfully", "roomID", roomID)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	go func() error {

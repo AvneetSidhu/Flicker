@@ -102,17 +102,20 @@ func (rm *RoomManager) DeleteRoom(roomID string) error {
 	defer rm.mu.Unlock()
 
 	if _, ok := rm.rooms[roomID]; !ok {
+		rm.logger.Warn("DeleteRoom: room not found in map", "roomID", roomID)
 		return nil
 	}
 
+	rm.logger.Info("DeleteRoom: removing ingest", "roomID", roomID)
 	rm.ingestManager.RemoveRoom(roomID)
 
+	rm.logger.Info("DeleteRoom: destroying VM", "roomID", roomID)
 	if err := rm.vmService.DestroyVM(roomID); err != nil {
 		rm.logger.Error("failed to destroy VM for room", "roomID", roomID, "err", err)
 	}
 
 	delete(rm.rooms, roomID)
-	rm.logger.Info("Removed room", slog.Any("roomID", roomID))
+	rm.logger.Info("DeleteRoom: done", "roomID", roomID)
 	return nil
 }
 
