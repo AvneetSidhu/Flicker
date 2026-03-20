@@ -71,8 +71,7 @@ func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType 
 					if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
 						continue
 					}
-					w.logger.Error("error reading from udp connection", "err", err)
-					continue
+					return
 				}
 
 				if n == 0 {
