@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v3"
@@ -23,11 +24,14 @@ const (
 type Room interface {
 	RemoveMember(s *Session) bool
 	AddMember(s *Session) bool
+	RequestControl(userID string) bool
+	ReleaseControl(userID string) bool
+	ForwardInput(userID string, event *control.CommandEvent) error
 }
 
 type roomManager interface {
 	GetRoom(roomID string) (Room, bool)
-	CreateRoom(ctx context.Context, roomName string, creator string) (string, error)
+	CreateRoom(ctx context.Context, roomName string, creator string, ownerID string) (string, error)
 }
 
 type Session struct {
@@ -188,12 +192,86 @@ func (s *Session) ReadPump(ctx context.Context) {
 				}
 
 				s.sendRoomCreated(roomID)
+			case "request-control":
+				s.handleControlRequest()
+			case "release-control":
+				s.handleControlRelease()
+			case "keyboard":
+				payload, err := parseWSMessagePayload[KeyboardInputPayload](wsMessage.Payload)
+				if err == nil {
+					err = s.forwardInput(&control.CommandEvent{Type: control.KeyboardEvent, Key: payload.Key, Action: payload.Action})
+				}
+				if err != nil {
+					s.Logger.Warn("rejected keyboard input", "err", err, "userID", s.UserID)
+				}
+			case "mouse":
+				payload, err := parseWSMessagePayload[MouseInputPayload](wsMessage.Payload)
+				if err == nil {
+					err = s.forwardInput(&control.CommandEvent{Type: control.MouseEvent, X: payload.X, Y: payload.Y, Action: payload.Action, Dragging: payload.Dragging})
+				}
+				if err != nil {
+					s.Logger.Warn("rejected mouse input", "err", err, "userID", s.UserID)
+				}
+			case "scroll":
+				payload, err := parseWSMessagePayload[ScrollInputPayload](wsMessage.Payload)
+				if err == nil {
+					err = s.forwardInput(&control.CommandEvent{Type: control.ScrollEvent, Direction: payload.Direction})
+				}
+				if err != nil {
+					s.Logger.Warn("rejected scroll input", "err", err, "userID", s.UserID)
+				}
 
 			default:
 				s.Logger.Error("readPump: unknown message type", slog.String("type", wsMessage.Type), slog.String("DisplayName", s.DisplayName), slog.String("UserID", s.UserID))
 				continue
 			}
 		}
+	}
+}
+
+func (s *Session) activeRoom() (Room, error) {
+	if s.roomID == "" {
+		return nil, fmt.Errorf("user has not joined a room")
+	}
+	room, ok := s.roomManager.GetRoom(s.roomID)
+	if !ok {
+		return nil, fmt.Errorf("room %s no longer exists", s.roomID)
+	}
+	return room, nil
+}
+
+func (s *Session) handleControlRequest() {
+	room, err := s.activeRoom()
+	if err != nil {
+		s.sendControlState(false)
+		return
+	}
+	s.sendControlState(room.RequestControl(s.UserID))
+}
+
+func (s *Session) handleControlRelease() {
+	room, err := s.activeRoom()
+	if err == nil {
+		room.ReleaseControl(s.UserID)
+	}
+	s.sendControlState(false)
+}
+
+func (s *Session) forwardInput(event *control.CommandEvent) error {
+	room, err := s.activeRoom()
+	if err != nil {
+		return err
+	}
+	return room.ForwardInput(s.UserID, event)
+}
+
+func (s *Session) sendControlState(granted bool) {
+	payload, _ := json.Marshal(ControlStatePayload{Granted: granted})
+	message, _ := json.Marshal(WSMessage{Type: "control-state", Payload: payload})
+	select {
+	case s.SendChan <- message:
+	default:
+		s.Logger.Warn("SendChan full, dropping control state")
 	}
 }
 
@@ -247,19 +325,18 @@ func parseWSMessagePayload[T any](payload []byte) (*T, error) {
 }
 
 func (s *Session) joinRoom(roomID string) error {
-	s.roomID = roomID
-
 	room, ok := s.roomManager.GetRoom(roomID)
 	if !ok {
 		return fmt.Errorf("could not retrieve room with roomID %s", roomID)
 	}
 
 	room.AddMember(s)
+	s.roomID = roomID
 	return nil
 }
 
 func (s *Session) createRoom(ctx context.Context, roomName string) (string, error) {
-	roomID, err := s.roomManager.CreateRoom(ctx, roomName, s.DisplayName)
+	roomID, err := s.roomManager.CreateRoom(ctx, roomName, s.DisplayName, s.UserID)
 	if err != nil {
 		return "", err
 	}
@@ -292,21 +369,40 @@ func (s *Session) sendRoomCreated(roomID string) {
 	}
 }
 
+func (s *Session) SendMessage(messageType string, payload any) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		s.Logger.Error("error marshalling session payload", "type", messageType, "err", err)
+		return
+	}
+	message, err := json.Marshal(WSMessage{Type: messageType, Payload: payloadBytes})
+	if err != nil {
+		s.Logger.Error("error marshalling session message", "type", messageType, "err", err)
+		return
+	}
+	select {
+	case s.SendChan <- message:
+	default:
+		s.Logger.Warn("SendChan full, dropping message", "type", messageType, "userID", s.UserID)
+	}
+}
+
 func (s *Session) CleanUpSession() {
 	s.cleanUpOnce.Do(func() {
 		if s.IsActive() { //currently forwarding rtp
-			s.rtpWriteCancel()
+			if s.rtpWriteCancel != nil {
+				s.rtpWriteCancel()
+			}
 		}
 
 		if s.roomID != "" { // if in a room, remove from room first
 			room, ok := s.roomManager.GetRoom(s.roomID)
-			if !ok {
-				return
-			}
-			removed := room.RemoveMember(s)
+			if ok {
+				removed := room.RemoveMember(s)
 
-			if !removed {
-				s.Logger.Error("error removing member from room", "userID", s.UserID, "roomID", s.roomID)
+				if !removed {
+					s.Logger.Error("error removing member from room", "userID", s.UserID, "roomID", s.roomID)
+				}
 			}
 		}
 
@@ -318,6 +414,8 @@ func (s *Session) CleanUpSession() {
 		close(s.VideoBuf)
 		close(s.SendChan)
 
-		s.socketConn.Close()
+		if s.socketConn != nil {
+			s.socketConn.Close()
+		}
 	})
 }

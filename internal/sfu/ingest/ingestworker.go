@@ -34,17 +34,18 @@ type ingestWorker struct {
 }
 
 func (w *ingestWorker) StartIngest(ctx context.Context) {
-	go w.startRTPIngest(ctx, w.audioPort, "audio")
-	go w.startRTPIngest(ctx, w.videoPort, "video")
-	go w.startRTCPIngest(ctx, w.audioPort+1)
-	go w.startRTCPIngest(ctx, w.videoPort+1)
+	go w.startRTPIngest(ctx, w.audioListener, w.audioPort, "audio")
+	go w.startRTPIngest(ctx, w.videoListener, w.videoPort, "video")
 }
 
-func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType string) {
-	conn, err := net.ListenPacket("udp", fmt.Sprintf("0.0.0.0:%s", strconv.Itoa(port)))
-	if err != nil {
-		w.logger.Error("error starting udp listener", "err", err)
-		return
+func (w *ingestWorker) startRTPIngest(ctx context.Context, conn net.PacketConn, port int, packetType string) {
+	if conn == nil {
+		var err error
+		conn, err = net.ListenPacket("udp", fmt.Sprintf("0.0.0.0:%s", strconv.Itoa(port)))
+		if err != nil {
+			w.logger.Error("error starting udp listener", "err", err)
+			return
+		}
 	}
 
 	if packetType == "audio" {
@@ -96,11 +97,11 @@ func (w *ingestWorker) startRTPIngest(ctx context.Context, port int, packetType 
 				}
 
 				w.once.Do(func() {
-				if w.onReady != nil {
-					w.onReady()
-				}
-			})
-			w.room.Broadcast(wrappedPkt, packetType)
+					if w.onReady != nil {
+						w.onReady()
+					}
+				})
+				w.room.Broadcast(wrappedPkt, packetType)
 			}
 		}
 	}()

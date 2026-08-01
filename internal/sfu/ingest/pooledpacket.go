@@ -14,6 +14,14 @@ type PooledPacket struct {
 	Time   uint32
 }
 
+func NewPooledPacket(packet *rtp.Packet, buffer []byte, done func([]byte)) *PooledPacket {
+	return &PooledPacket{
+		Packet: packet,
+		Buffer: buffer,
+		done:   done,
+	}
+}
+
 func (p *PooledPacket) Acquire() {
 	atomic.AddInt32(&p.refs, 1)
 }
@@ -24,6 +32,8 @@ func (p *PooledPacket) AcquireBulk(refs int32) {
 
 func (p *PooledPacket) Release() {
 	if atomic.AddInt32(&p.refs, -1) <= 0 {
-		p.done(p.Buffer)
+		if p.done != nil {
+			p.done(p.Buffer)
+		}
 	}
 }

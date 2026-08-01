@@ -39,6 +39,10 @@ func loadConfig() (*vmagent.Config, error) {
 	if sfuGrpcAddr == "" {
 		return nil, fmt.Errorf("missing SFU_GRPC_ADDR")
 	}
+	sfuGrpcAuthToken := os.Getenv("SFU_GRPC_AUTH_TOKEN")
+	if sfuGrpcAuthToken == "" {
+		return nil, fmt.Errorf("missing SFU_GRPC_AUTH_TOKEN")
+	}
 
 	roomID := os.Getenv("ROOM_ID")
 	if roomID == "" {
@@ -56,12 +60,13 @@ func loadConfig() (*vmagent.Config, error) {
 	}
 
 	return &vmagent.Config{
-		SFUForwardAddr: sfuForwardAddr,
-		AvListenPort:   listenPortStr,
-		SFUgRPCAddr:    sfuGrpcAddr,
-		RoomID:         roomID,
-		AudioPort:      audioPort,
-		VideoPort:      videoPort,
+		SFUForwardAddr:   sfuForwardAddr,
+		AvListenPort:     listenPortStr,
+		SFUgRPCAddr:      sfuGrpcAddr,
+		SFUgRPCAuthToken: sfuGrpcAuthToken,
+		RoomID:           roomID,
+		AudioPort:        audioPort,
+		VideoPort:        videoPort,
 	}, nil
 }
 
@@ -163,7 +168,7 @@ func runControlService(ctx context.Context, cfg *vmagent.Config, logger *slog.Lo
 	}
 
 	client := controlpb.NewInputServiceClient(gRPCConnection)
-	controlService := control_service.NewControlService(client, ch, logger, cfg.RoomID)
+	controlService := control_service.NewControlService(client, ch, logger, cfg.RoomID, cfg.SFUgRPCAuthToken)
 
 	go func() {
 		defer gRPCConnection.Close()
@@ -173,6 +178,10 @@ func runControlService(ctx context.Context, cfg *vmagent.Config, logger *slog.Lo
 }
 
 func runInjectorService(ctx context.Context, logger *slog.Logger, ch <-chan *controlpb.InputMessage) error {
+	if err := injector.ValidateEnvironment(); err != nil {
+		return err
+	}
+
 	injectorService := injector.NewInjectorService(ch, logger)
 
 	go func() {

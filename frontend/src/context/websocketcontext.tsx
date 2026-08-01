@@ -8,6 +8,13 @@ import {
   useState,
 } from "react";
 
+export type WebSocketMessage = {
+  type: string;
+  payload?: Record<string, unknown>;
+};
+
+type MessageListener = (msg: WebSocketMessage) => void;
+
 type WebSocketContextType = {
   socket: WebSocket | null;
   isConnected: boolean;
@@ -17,8 +24,8 @@ type WebSocketContextType = {
   disconnect: () => void;
   send: (data: string | ArrayBufferLike | Blob | ArrayBufferView) => boolean;
   sendJson: (msg: unknown) => boolean;
-  addMessageListener: (fn: (msg: any) => void) => void;
-  removeMessageListener: (fn: (msg: any) => void) => void;
+  addMessageListener: (fn: MessageListener) => void;
+  removeMessageListener: (fn: MessageListener) => void;
 };
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(
@@ -35,6 +42,10 @@ function buildWSUrl(displayName: string, userId: string): string {
   return `${protocol}://${host}/ws?${params.toString()}`;
 }
 
+function isWebSocketMessage(value: unknown): value is WebSocketMessage {
+  return typeof value === "object" && value !== null && "type" in value && typeof value.type === "string";
+}
+
 export const WebSocketProvider = ({
   children,
 }: {
@@ -45,13 +56,11 @@ export const WebSocketProvider = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const openListenerRef = useRef<(() => void) | null>(null);
-  const listenersRef = useRef(new Set<(msg: any) => void>());
+  const listenersRef = useRef(new Set<MessageListener>());
 
   const disconnect = useCallback(() => {
     if (socket) {
-      try {
-        socket.close();
-      } catch {}
+      socket.close();
     }
     setIsConnected(false);
     setIsConnecting(false);
@@ -66,13 +75,9 @@ export const WebSocketProvider = ({
 
       let userId = localStorage.getItem("userId");
       if (!userId) {
-        try {
-          userId = (crypto as any).randomUUID
-            ? crypto.randomUUID()
-            : Math.random().toString(36).slice(2);
-        } catch {
-          userId = Math.random().toString(36).slice(2);
-        }
+        userId = typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : Math.random().toString(36).slice(2);
         localStorage.setItem("userId", userId);
       }
 
@@ -81,9 +86,7 @@ export const WebSocketProvider = ({
       try {
         // Close any previous socket before creating a new one
         if (socket) {
-          try {
-            socket.close();
-          } catch {}
+          socket.close();
         }
 
         const ws = new WebSocket(url);
@@ -107,7 +110,11 @@ export const WebSocketProvider = ({
 
         ws.onmessage = (event) => {
           try {
-            const data = JSON.parse(event.data);
+            const data: unknown = JSON.parse(event.data);
+            if (!isWebSocketMessage(data)) {
+              console.error("WS message has an invalid shape");
+              return;
+            }
             listenersRef.current.forEach((fn) => {
               try {
                 fn(data);
@@ -119,9 +126,9 @@ export const WebSocketProvider = ({
             console.error("WS message parse error", err);
           }
         };
-      } catch (e: any) {
+      } catch (error: unknown) {
         setIsConnecting(false);
-        setError(e?.message || "Failed to connect");
+        setError(error instanceof Error ? error.message : "Failed to connect");
       }
     },
     [socket]
@@ -143,20 +150,18 @@ export const WebSocketProvider = ({
     [send]
   );
 
-  const addMessageListener = useCallback((fn: (msg: any) => void) => {
+  const addMessageListener = useCallback((fn: MessageListener) => {
     listenersRef.current.add(fn);
   }, []);
 
-  const removeMessageListener = useCallback((fn: (msg: any) => void) => {
+  const removeMessageListener = useCallback((fn: MessageListener) => {
     listenersRef.current.delete(fn);
   }, []);
 
   useEffect(() => {
     return () => {
       // Cleanup on unmount
-      try {
-        socket?.close();
-      } catch {}
+      socket?.close();
     };
   }, [socket]);
 

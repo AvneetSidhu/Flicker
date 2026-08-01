@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -11,11 +12,15 @@ import (
 	"github.com/AvneetSidhu/Flicker/internal/sfu/control"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/ingest"
 	"github.com/AvneetSidhu/Flicker/internal/sfu/session"
-	"github.com/AvneetSidhu/Flicker/internal/sfu/vm"
 	"github.com/google/uuid"
 )
 
 const emptyRoomTimeout = 2 * time.Minute
+
+var (
+	ErrRoomNotFound = errors.New("room not found")
+	ErrNotRoomOwner = errors.New("room deletion requires owner")
+)
 
 // make thread safe
 type RoomManager struct {
@@ -24,11 +29,26 @@ type RoomManager struct {
 	roomsCreatedLifetime   uint32
 	mu                     sync.RWMutex
 	controlEventMessageBus chan<- *control.CommandEvent
-	ingestManager          *ingest.IngestManager
-	vmService              *vm.VMService
+	ingestManager          ingestManager
+	vmService              vmService
+	vmCancels              map[string]context.CancelFunc
 }
 
-func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.CommandEvent, ingestManager *ingest.IngestManager, vmService *vm.VMService) *RoomManager {
+type ingestManager interface {
+	AddRoom(roomID string, audioListener net.PacketConn, videoListener net.PacketConn, room ingest.Room, onReady func(), ctx context.Context)
+	RemoveRoom(roomID string)
+}
+
+type vmService interface {
+	CreateVM(ctx context.Context, roomID string, audioPort int, videoPort int) error
+	DestroyVM(roomID string) error
+}
+
+func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.CommandEvent, ingestManager ingestManager, vmService vmService) *RoomManager {
+	return newRoomManager(logger, controlEventMessageBus, ingestManager, vmService, true)
+}
+
+func newRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.CommandEvent, ingestManager ingestManager, vmService vmService, startReaper bool) *RoomManager {
 	rm := &RoomManager{
 		rooms:                  make(map[string]*Room),
 		logger:                 logger,
@@ -37,8 +57,11 @@ func NewRoomManager(logger *slog.Logger, controlEventMessageBus chan<- *control.
 		controlEventMessageBus: controlEventMessageBus,
 		ingestManager:          ingestManager,
 		vmService:              vmService,
+		vmCancels:              make(map[string]context.CancelFunc),
 	}
-	go rm.runEmptyRoomReaper()
+	if startReaper {
+		go rm.runEmptyRoomReaper()
+	}
 	return rm
 }
 
@@ -69,44 +92,91 @@ func (rm *RoomManager) GetRoom(roomID string) (session.Room, bool) {
 	return room, ok
 }
 
-func (rm *RoomManager) CreateRoom(ctx context.Context, roomName string, creator string) (string, error) {
+func (rm *RoomManager) CreateRoom(ctx context.Context, roomName string, creator string, ownerID string) (string, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if len(rm.rooms) >= 10 {
 		return "", fmt.Errorf("Maximum rooms created, unable to create new room")
 	}
-	audioPort, _, videoPort, _, err := allocateRoomPorts()
+	audioListener, videoListener, err := allocateRoomListeners()
 	if err != nil {
 		return "", fmt.Errorf("error allocating room ports: %w", err)
 	}
+	audioPort := audioListener.LocalAddr().(*net.UDPAddr).Port
+	videoPort := videoListener.LocalAddr().(*net.UDPAddr).Port
 
 	roomID := uuid.New().String()
 	rm.logger.Info("Creating room", slog.Any("roomID", roomID), slog.String("creator", creator))
 
-	room := NewRoom(rm.logger, roomID, roomName, creator, rm.controlEventMessageBus)
+	room := NewRoom(rm.logger, roomID, roomName, creator, ownerID, rm.controlEventMessageBus)
 
-	rm.ingestManager.AddRoom(roomID, audioPort, videoPort, room, room.SetVMReady, ctx)
+	rm.ingestManager.AddRoom(roomID, audioListener, videoListener, room, room.SetVMReady, ctx)
+	vmCtx, vmCancel := context.WithCancel(ctx)
+	rm.vmCancels[roomID] = vmCancel
 
 	go func() {
-		if err := rm.vmService.CreateVM(ctx, roomID, audioPort, videoPort); err != nil {
-			rm.logger.Error("failed to provision VM for room", "roomID", roomID, "err", err)
+		if err := rm.vmService.CreateVM(vmCtx, roomID, audioPort, videoPort); err != nil {
+			if vmCtx.Err() == nil {
+				rm.markProvisioningFailed(roomID, err)
+			}
 		}
+		rm.mu.Lock()
+		delete(rm.vmCancels, roomID)
+		rm.mu.Unlock()
 	}()
 
 	rm.rooms[room.RoomID] = room
 	return roomID, nil
 }
 
+func (rm *RoomManager) markProvisioningFailed(roomID string, err error) {
+	rm.mu.RLock()
+	room, ok := rm.rooms[roomID]
+	rm.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	rm.logger.Error("failed to provision VM for room", "roomID", roomID, "err", err)
+	rm.ingestManager.RemoveRoom(roomID)
+
+	rm.mu.Lock()
+	if currentRoom, ok := rm.rooms[roomID]; ok && currentRoom == room {
+		room.SetVMFailed(err)
+	}
+	rm.mu.Unlock()
+}
+
 func (rm *RoomManager) DeleteRoom(roomID string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+	return rm.deleteRoomLocked(roomID)
+}
 
+func (rm *RoomManager) DeleteRoomForOwner(roomID string, ownerID string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return ErrRoomNotFound
+	}
+	if ownerID == "" || room.OwnerID != ownerID {
+		return ErrNotRoomOwner
+	}
+	return rm.deleteRoomLocked(roomID)
+}
+
+func (rm *RoomManager) deleteRoomLocked(roomID string) error {
 	if _, ok := rm.rooms[roomID]; !ok {
-		rm.logger.Warn("DeleteRoom: room not found in map", "roomID", roomID)
-		return nil
+		return ErrRoomNotFound
 	}
 
 	rm.logger.Info("DeleteRoom: removing ingest", "roomID", roomID)
+	if cancel, ok := rm.vmCancels[roomID]; ok {
+		cancel()
+		delete(rm.vmCancels, roomID)
+	}
 	rm.ingestManager.RemoveRoom(roomID)
 
 	rm.logger.Info("DeleteRoom: destroying VM", "roomID", roomID)
@@ -120,11 +190,14 @@ func (rm *RoomManager) DeleteRoom(roomID string) error {
 }
 
 type RoomInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Creator string `json:"creator"`
-	Viewers int    `json:"viewers"`
-	IsLive  bool   `json:"isLive"`
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Creator string  `json:"creator"`
+	OwnerID string  `json:"ownerId"`
+	Viewers int     `json:"viewers"`
+	IsLive  bool    `json:"isLive"`
+	VMState VMState `json:"vmState"`
+	Failure string  `json:"failure,omitempty"`
 }
 
 func (rm *RoomManager) GetRooms() []RoomInfo {
@@ -136,48 +209,26 @@ func (rm *RoomManager) GetRooms() []RoomInfo {
 			ID:      r.RoomID,
 			Name:    r.Name,
 			Creator: r.Creator,
+			OwnerID: r.OwnerID,
 			Viewers: r.MemberCount(),
 			IsLive:  r.IsVMReady(),
+			VMState: r.VMState(),
+			Failure: r.VMFailure(),
 		})
 	}
 	return rooms
 }
 
-func allocateRoomPorts() (audioRTP, audioRTCP, videoRTP, videoRTCP int, err error) {
-	audioRTP, err = findFreeUDPPort()
+func allocateRoomListeners() (net.PacketConn, net.PacketConn, error) {
+	audioListener, err := net.ListenPacket("udp", "0.0.0.0:0")
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("failed to allocate audio RTP port: %w", err)
-	}
-	audioRTCP = audioRTP + 1
-
-	for {
-		videoRTP, err = findFreeUDPPort()
-		if err != nil {
-			return 0, 0, 0, 0, fmt.Errorf("failed to allocate video RTP port: %w", err)
-		}
-		videoRTCP = videoRTP + 1
-
-		if videoRTP != audioRTCP {
-			break
-		}
-
+		return nil, nil, fmt.Errorf("failed to reserve audio RTP port: %w", err)
 	}
 
-	return audioRTP, audioRTCP, videoRTP, videoRTCP, nil
-}
-
-func findFreeUDPPort() (int, error) {
-	addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:0")
+	videoListener, err := net.ListenPacket("udp", "0.0.0.0:0")
 	if err != nil {
-		return 0, fmt.Errorf("failed to resolve UDP address: %w", err)
+		audioListener.Close()
+		return nil, nil, fmt.Errorf("failed to reserve video RTP port: %w", err)
 	}
-
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return 0, fmt.Errorf("failed to listen on port 0: %w", err)
-	}
-	defer conn.Close()
-
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-	return port, nil
+	return audioListener, videoListener, nil
 }

@@ -1,125 +1,72 @@
 # Flicker
 
-A proof-of-concept watch-party stack built around a Go WebRTC SFU, a VM-side agent, and a React/Tailwind front-end. Use this doc to navigate the codebase, understand the data paths, and get the services running locally.
+Flicker provides browser-based viewing and exclusive remote control of a desktop running in a per-room libvirt VM. It consists of a Go WebRTC SFU, a VM-side GStreamer/X11 agent, and a React frontend.
 
-## Repository Map
-- `cmd/sfu` — entrypoint for the SFU/signaling server (WebSocket + gRPC).
-- `cmd/vmagent` — headless agent that streams media to the SFU and applies control input.
-- `cmd/mockgrpcserver` — lightweight test server that emits dummy control events.
-- `internal/sfu` — SFU domain logic:
-  - `server` (WebSocket upgrading & session wiring)
-  - `session` (WS protocol, WebRTC peer creation, RTP write pumps)
-  - `room` (room roster + RTP fanout)
-  - `ingest` (UDP listeners that accept RTP from the agent)
-  - `control` (gRPC stream of keyboard/mouse/scroll events)
-  - `vm` (stub for VM lifecycle)
-- `internal/vmagent` — agent pieces:
-  - `control` (gRPC client consuming control stream)
-  - `injector` (currently prints control events; placeholder for actual OS input injection)
-  - `avservice` (tags & forwards RTP; unused in current main)
-- `api/control.proto` + generated `api/controlpb/` — gRPC API for control plane.
-- `frontend/` — Vite + React + Tailwind UI for landing/rooms/video pages.
-- `.github/workflows/deploy.yml` — self-hosted CI that builds backend, agent, and frontend.
+## Architecture
 
-## How the Backend SFU Works
-1. **Startup** (`cmd/sfu/main.go`)
-   - Loads `.env` for `PORT` (WebSocket), `TAILNET_IP` (NAT 1:1 IP), `LOG_LEVEL`, `SFU_GRPC_PORT` (control gRPC), `INGEST_PORT` (UDP ingest base; currently unused in code), and `SFU_GRPC_PORT`.
-   - Spins up:
-     - gRPC `InputService` on `SFU_GRPC_PORT` to forward control events to agents.
-     - WebSocket server on `/ws` (loopback 127.0.0.1 by default) for browser clients.
-     - Room/ingest managers and a shared control event channel.
+- `cmd/sfu`: loopback HTTP/WebSocket signaling server and Tailnet-bound gRPC control server.
+- `cmd/vmagent`: captures X11/PulseAudio, sends RTP to its room's dedicated UDP ports, receives control commands, and injects them with `xdotool`.
+- `internal/sfu/room`: room lifecycle, controller ownership, presence, and RTP fanout.
+- `internal/sfu/vm`: libvirt clone, configuration, start, destroy, and disk cleanup.
+- `frontend`: React client for room creation, WebRTC viewing, presence, and control.
 
-2. **Signaling & Sessions** (`internal/sfu/server`, `internal/sfu/session`)
-   - `WsConnectHandler` upgrades clients; constructs a `Session`.
-   - `Session.ReadPump` consumes incoming WS messages:
-     - `"offer"` → creates a Pion `PeerConnection`, adds static audio (Opus) and video (VP8) tracks, and replies with `"answer"`.
-     - `"ice-candidate"` → added to the peer.
-     - `"join-room"` / `"create-room"` → calls into `RoomManager`.
-   - `Session.WritePump` sends signaling responses (answers, ICE) back to the client.
-   - `StartWritingRTP` drains `AudioBuf` / `VideoBuf` channels and writes RTP into the local tracks; emits RTCP SR every 5s.
+Data paths:
 
-3. **Rooms & Media Fanout** (`internal/sfu/room`)
-   - `RoomManager` holds up to 10 rooms (room IDs are currently hard-coded `"12345"`).
-   - `Room.Broadcast` pushes incoming RTP packets into each active member’s audio/video buffers (with simple backpressure: drop oldest on full buffer).
+1. Browser WebSocket signaling reaches the SFU through Nginx.
+2. The browser receives audio/video through WebRTC.
+3. Each VM sends RTP to dedicated SFU UDP ports.
+4. Authorized control events flow browser WebSocket → SFU → authenticated gRPC stream → VM agent → X11.
 
-4. **Media Ingest** (`internal/sfu/ingest`)
-   - `IngestManager.AddRoom` spawns an `ingestWorker` that listens on UDP ports (currently fixed to 50005 audio / 50007 video regardless of passed values) and calls `Room.Broadcast` with parsed RTP packets.
-   - RTCP ingest is stubbed.
+## Required Configuration
 
-5. **Control Plane** (`internal/sfu/control`)
-   - gRPC `InputService.StreamInputs` multiplexes per-room streams (metadata header `room-id`).
-   - `CommandEvent` structs (keyboard/mouse/scroll) pulled from `controlMessageEventBus` are serialized and pushed to the appropriate gRPC stream.
+SFU environment:
 
-## VM Agent (cmd/vmagent)
-Purpose: run beside the media source, forward RTP to the SFU, and apply control inputs.
+```dotenv
+PORT=50000
+TAILNET_IP=100.x.y.z
+SFU_GRPC_PORT=50051
+SFU_GRPC_AUTH_TOKEN=replace-with-a-high-entropy-secret
+VM_BASE_NAME=flicker-node
+LOG_LEVEL=info
+```
 
-Components:
-- **Config** (`internal/vmagent/config.go`): expects `SFU_FORWARD_ADDR`, `LISTEN_PORT`, `SFU_GRPC_ADDR`, `ROOM_ID`, `AUDIO_PORT`, `VIDEO_PORT`.
-- **Control service** (`internal/vmagent/control`): gRPC client to SFU `InputService`; streams events into a channel.
-- **Injector service** (`internal/vmagent/injector`): currently logs events; replace `handleInput` with real OS input injection.
-- **AV service** (`internal/vmagent/avservice`): reads RTP from a local UDP socket, tags with room ID as header extension, and forwards to SFU; not currently wired in `main`.
-- **GStreamer helper** (`spawnGStreamer` in `cmd/vmagent/main.go`): demonstrates a test pipeline sending opus (pt=111) and VP8 (pt=96) to SFU; main currently never calls it.
+`SFU_GRPC_AUTH_TOKEN` is mandatory and must be a high-entropy secret. The SFU binds gRPC only to `TAILNET_IP`; the VM agent receives the token in `/etc/vmagent.env` with mode `0600`.
 
-Known gaps/TODOs:
-- `main.go` has a placeholder `if err :=  (ctx, cfg, logger);` — intended to call `spawnGStreamer`; wire it up.
-- `loadConfig` swaps audio/video env names (`AUDIO_PORT` → `videoPort`, `VIDEO_PORT` → `audioPort`); fix before relying on it.
-- Ingest worker ignores per-room port allocation (uses hard-coded 50005/50007); align with negotiated ports.
-- Room IDs are static; introduce real IDs and surface them to clients/agent.
+## Development
 
-## Frontend (frontend/)
-- Stack: Vite, React, TypeScript, Tailwind, shadcn/ui.
-- Routing (`src/App.tsx`): `/` landing, `/rooms` list, `/room/:roomId` playback, wildcard → 404.
-- WebSocket handling (`src/context/websocketcontext.tsx`): builds `ws://<host>/ws?displayname&userid`, maintains connection state, exposes `connect`, `disconnect`, `send`.
-- Pages:
-  - `Landing` — collect display name and open WS connection.
-  - `Rooms` — mock room list with create dialog (no backend yet).
-  - `VideoRoom` — plays a sample MP4 with UI chrome; not yet connected to WebRTC stream.
+```powershell
+go test ./...
+go vet ./...
 
-Run locally:
-```bash
 cd frontend
 npm install
-npm run dev    # defaults to Vite dev server on 5173
+npm run lint
+npm test
+npm run build
 ```
-Ensure the Go backend is reachable at the same host/port or configure a dev proxy so `/ws` points to `cmd/sfu`’s WebSocket endpoint.
 
-## Local Backend Runbook
-1. Copy `.env` and adjust:
-   - `PORT` — WebSocket listen port (default 50000 in repo).
-   - `TAILNET_IP` — public/NAT IP for ICE host candidates.
-   - `SFU_GRPC_PORT` — gRPC control port.
-   - `INGEST_PORT` — intended base UDP ingest port (currently unused).
-   - For agent: `SFU_FORWARD_ADDR`, `SFU_GRPC_ADDR`, `ROOM_ID`, `AUDIO_PORT`, `VIDEO_PORT`, `LISTEN_PORT`.
-2. Start SFU:
-   ```bash
-   go run ./cmd/sfu
-   ```
-3. Start VM agent (after fixing the TODOs above):
-   ```bash
-   go run ./cmd/vmagent
-   ```
-4. Optionally run `cmd/mockgrpcserver` to simulate control input during development.
+The frontend development server needs a proxy for `/ws` and `/rooms`, or the backend must be reachable through the same origin.
 
-## Message/Protocol Cheat Sheet
-- **WebSocket messages** (`internal/sfu/session/message.go`):
-  - `{"type":"offer","payload":{"sdp":string}}`
-  - `{"type":"ice-candidate","payload":{"candidate":string,"sdpMid":string,"sdpMLineIndex":number}}`
-  - `{"type":"join-room","payload":{"roomId":string}}`
-  - `{"type":"create-room","payload":{"roomName":string}}`
-- **gRPC control** (`api/control.proto`):
-  - `InputService.StreamInputs(google.protobuf.Empty) returns (stream InputMessage)`
-  - `InputMessage` oneof: `KeyboardInput {key, action}`, `MouseInput {x,y,action,dragging}`, `ScrollInput {direction}` plus `roomID`.
+## Deployment
 
-## Deployment Notes
-- CI workflow builds:
-  - `go build ./cmd/sfu` → `backend-binary`
-  - `go build ./cmd/vmagent` → `vmagent/vmagent-binary`
-  - `npm run build` in `frontend/` → static assets
-- Deploy step copies artifacts to `/home/deploy/app` on a self-hosted runner and restarts `myapp` systemd service.
+The SFU intentionally listens on `127.0.0.1:$PORT`. Deploy `deploy/nginx/flicker.conf` as an Nginx virtual host, replace `flicker.example.com`, configure a TLS certificate, and serve the frontend build from `/home/deploy/app/frontend`.
 
-## Quick Orientation Tips
-- Start with `cmd/sfu/main.go` to see startup wiring.
-- Trace WebSocket handling: `server.WsConnectHandler` → `session.ReadPump`/`WritePump` → `session.StartWritingRTP`.
-- RTP path: agent UDP → `ingest.ingestWorker.startRTPIngest` → `room.Room.Broadcast` → per-session track write pumps.
-- Control path: UI (future) → `control.CommandEvent` → gRPC `InputService` → agent `control.ControlService` → `injector`.
-- Frontend uses mock data; real-time hookup will require integrating WebRTC offer/answer exchange over `/ws` and feeding RTP from the SFU.
+The workflow in `.github/workflows/deploy.yml` builds and deploys the SFU, frontend, and VM-agent systemd unit. The runner requires libvirt, KVM, libguestfs tools, access to the base domain, and permission to restart the SFU and reload Nginx.
+
+See `vm.txt` for the complete VM-image and host prerequisites.
+
+See `SYSTEM_DESIGN.md` for the architecture, lifecycle, stack tradeoffs, and reliability techniques.
+
+## Security Boundary
+
+- Browsers must connect through HTTPS/WSS at the reverse proxy.
+- The current browser identity is an application-generated ID and is **not authentication**. Do not expose Flicker publicly until an OIDC/JWT provider is configured and enforced for HTTP and WebSocket requests.
+- SFU-to-agent commands use Tailnet transport plus a bearer token. Use mTLS or per-VM credentials when the agent path crosses an untrusted network or tenant boundary.
+
+## RTCP Scope
+
+RTP ingest runs over the private SFU/VM network. Browser-side WebRTC feedback is handled by Pion for the downstream connection, but feedback is not relayed back to the VM's GStreamer pipeline. For unreliable or internet-facing VM ingest, add RTCP feedback ports and wire PLI/NACK into the encoder pipeline before deployment.
+
+## Tests
+
+See `TESTING.md` for unit coverage and Linux integration requirements.

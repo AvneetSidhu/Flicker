@@ -11,13 +11,28 @@ import (
 )
 
 type VMServiceConfig struct {
-	BaseDomain string // libvirt domain name to clone from (e.g. "flicker-node")
-	SFUHost    string // Tailscale IP — vmagent sends RTP here and connects for gRPC
-	GRPCPort   string
+	BaseDomain    string // libvirt domain name to clone from (e.g. "flicker-node")
+	SFUHost       string // Tailscale IP — vmagent sends RTP here and connects for gRPC
+	GRPCPort      string
+	GRPCAuthToken string
 }
 
 type vmInstance struct {
 	domainName string
+}
+
+type commandRunner interface {
+	Run(ctx context.Context, name string, args []string, env []string) ([]byte, error)
+}
+
+type execCommandRunner struct{}
+
+func (execCommandRunner) Run(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, args...)
+	if env != nil {
+		command.Env = env
+	}
+	return command.CombinedOutput()
 }
 
 type VMService struct {
@@ -25,6 +40,7 @@ type VMService struct {
 	vms    map[string]*vmInstance
 	cfg    VMServiceConfig
 	logger *slog.Logger
+	runner commandRunner
 }
 
 func NewVMService(logger *slog.Logger, cfg VMServiceConfig) *VMService {
@@ -32,6 +48,7 @@ func NewVMService(logger *slog.Logger, cfg VMServiceConfig) *VMService {
 		vms:    make(map[string]*vmInstance),
 		cfg:    cfg,
 		logger: logger,
+		runner: execCommandRunner{},
 	}
 }
 
@@ -44,21 +61,21 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 	domainName := fmt.Sprintf("flicker-%s", roomID)
 
 	// Clone the base domain (creates a stopped VM with a new QCOW2 overlay).
-	if out, err := exec.CommandContext(ctx, "virt-clone",
+	if out, err := s.runner.Run(ctx, "virt-clone", []string{
 		"--connect", "qemu:///system",
 		"--original", s.cfg.BaseDomain,
 		"--name", domainName,
 		"--auto-clone",
 		"--check", "disk_size=off",
-	).CombinedOutput(); err != nil {
+	}, nil); err != nil {
 		return fmt.Errorf("virt-clone failed: %w: %s", err, out)
 	}
 	s.logger.Info("VM cloned", "roomID", roomID, "domain", domainName)
 
 	// Write /etc/vmagent.env into the cloned disk while it is still offline.
 	envContent := fmt.Sprintf(
-		"SFU_FORWARD_ADDR=%s\nSFU_GRPC_ADDR=%s:%s\nROOM_ID=%s\nAUDIO_PORT=%d\nVIDEO_PORT=%d\nLISTEN_PORT=5000\n",
-		s.cfg.SFUHost, s.cfg.SFUHost, s.cfg.GRPCPort, roomID, audioPort, videoPort,
+		"SFU_FORWARD_ADDR=%s\nSFU_GRPC_ADDR=%s:%s\nSFU_GRPC_AUTH_TOKEN=%s\nROOM_ID=%s\nAUDIO_PORT=%d\nVIDEO_PORT=%d\nLISTEN_PORT=5000\n",
+		s.cfg.SFUHost, s.cfg.SFUHost, s.cfg.GRPCPort, s.cfg.GRPCAuthToken, roomID, audioPort, videoPort,
 	)
 
 	envFile, err := os.CreateTemp("", fmt.Sprintf("vmagent-%s-*.env", roomID))
@@ -74,19 +91,17 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 	}
 	envFile.Close()
 
-	virtCustomize := exec.CommandContext(ctx, "sudo", "-E",
+	if out, err := s.runner.Run(ctx, "sudo", []string{"-E",
 		"virt-customize",
 		"--connect", "qemu:///system",
 		"--no-network",
 		"-d", domainName,
 		"--upload", fmt.Sprintf("%s:/etc/vmagent.env", envFile.Name()),
-		"--chmod", "0644:/etc/vmagent.env",
+		"--chmod", "0600:/etc/vmagent.env",
 		// Allow local processes (e.g. the vmagent systemd service) to connect
 		// to the X display without needing an Xauthority cookie.
 		"--run-command", "echo 'xhost +local:' > /etc/X11/Xsession.d/90-xhost-local && chmod +x /etc/X11/Xsession.d/90-xhost-local",
-	)
-	virtCustomize.Env = append(os.Environ(), "LIBGUESTFS_BACKEND=direct")
-	if out, err := virtCustomize.CombinedOutput(); err != nil {
+	}, append(os.Environ(), "LIBGUESTFS_BACKEND=direct")); err != nil {
 		os.Remove(envFile.Name())
 		s.cleanupDomain(domainName)
 		return fmt.Errorf("virt-customize failed: %w: %s", err, out)
@@ -94,7 +109,7 @@ func (s *VMService) CreateVM(ctx context.Context, roomID string, audioPort int, 
 	os.Remove(envFile.Name())
 
 	// Start the VM.
-	if out, err := exec.CommandContext(ctx, "virsh", "-c", "qemu:///system", "start", domainName).CombinedOutput(); err != nil {
+	if out, err := s.runner.Run(ctx, "virsh", []string{"-c", "qemu:///system", "start", domainName}, nil); err != nil {
 		s.cleanupDomain(domainName)
 		return fmt.Errorf("virsh start failed: %w: %s", err, out)
 	}
@@ -124,17 +139,14 @@ func (s *VMService) DestroyVM(roomID string) error {
 // deletes its disk images. Errors are logged but not returned — best-effort.
 func (s *VMService) cleanupDomain(domainName string) {
 	virsh := func(args ...string) (string, error) {
-		out, err := exec.Command("virsh", append([]string{"-c", "qemu:///system"}, args...)...).CombinedOutput()
+		out, err := s.runner.Run(context.Background(), "virsh", append([]string{"-c", "qemu:///system"}, args...), nil)
 		return string(out), err
 	}
 
-	// Force-stop if running.
-	if out, err := virsh("domstate", domainName); err == nil {
-		if strings.Contains(strings.ToLower(out), "running") {
-			if _, err := virsh("destroy", domainName); err != nil {
-				s.logger.Warn("virsh destroy failed", "domain", domainName, "err", err)
-			}
-		}
+	// Force-stop unconditionally — handles any running state including
+	// "shutdown" (VM stuck on a graceful-shutdown menu) and "paused".
+	if _, err := virsh("destroy", domainName); err != nil {
+		s.logger.Warn("virsh destroy failed (may already be stopped)", "domain", domainName, "err", err)
 	}
 
 	// Collect disk paths before undefining.
@@ -171,7 +183,7 @@ func (s *VMService) cleanupDomain(domainName string) {
 
 // collectDiskPaths returns the file paths of all disk images attached to the domain.
 func (s *VMService) collectDiskPaths(domainName string) []string {
-	out, err := exec.Command("virsh", "-c", "qemu:///system", "domblklist", domainName, "--details").CombinedOutput()
+	out, err := s.runner.Run(context.Background(), "virsh", []string{"-c", "qemu:///system", "domblklist", domainName, "--details"}, nil)
 	if err != nil {
 		return nil
 	}
@@ -188,7 +200,7 @@ func (s *VMService) collectDiskPaths(domainName string) []string {
 
 	// Fallback: plain domblklist without --details
 	if len(paths) == 0 {
-		out2, err := exec.Command("virsh", "-c", "qemu:///system", "domblklist", domainName).CombinedOutput()
+		out2, err := s.runner.Run(context.Background(), "virsh", []string{"-c", "qemu:///system", "domblklist", domainName}, nil)
 		if err == nil {
 			lines := strings.Split(string(out2), "\n")
 			for _, line := range lines[2:] { // skip header rows

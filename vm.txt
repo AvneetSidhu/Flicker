@@ -1,140 +1,44 @@
-FLICKER - VM IMAGE REQUIREMENTS & CONSTRAINTS
-=============================================
-Reviewed: 2026-03-06
+# Flicker VM Image Requirements
 
-The SFU uses libvirt to clone a base VM domain for each room. This file
-documents what the base VM image must contain, and what the host server needs.
+Reviewed: 2026-07-31
 
+## Host
 
-=== HOST SERVER REQUIREMENTS ===
+- Linux host with libvirt, QEMU/KVM, `virt-clone`, `virsh`, and `virt-customize` from `libguestfs-tools`.
+- The SFU/deploy user needs access to `qemu:///system`, the base image storage, and `/dev/kvm`.
+- The base domain named by `VM_BASE_NAME` must be shut off. It is cloned once per room and must never be used as an active desktop.
+- The VM must be able to reach the SFU Tailnet address for gRPC and UDP RTP.
 
-1. libvirt + QEMU/KVM installed and running
-   - libvirtd must be active: systemctl status libvirtd
-   - The user running the SFU process must be in the 'libvirt' group so it
-     can run virsh and virt-clone without sudo.
-   - KVM acceleration is expected. Verify: ls /dev/kvm
+## Base Image
 
-2. libguestfs-tools installed
-   - Required for virt-customize (used in CI to inject vmagent binary into
-     the base image, and could be used for offline disk inspection).
-   - Install: apt install libguestfs-tools
-   - The runner user needs read access to /var/lib/libvirt/images/.
-     Add to libvirt group: usermod -aG libvirt <runner-user>
+- A systemd-based Debian/Ubuntu-compatible desktop image with an active X11 display at `:0`.
+- GStreamer packages: `gstreamer1.0-tools`, `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, and `gstreamer1.0-plugins-bad`.
+- PulseAudio source available to `pulsesrc` and X11 screen capture available to `ximagesrc`.
+- `xdotool` installed and local X11 access permitted for the service account (the provisioning path configures `xhost +local:`).
+- `vmagent.service` enabled. CI installs `/usr/local/bin/vmagent` and the service unit into the offline base image.
 
-3. Base VM domain must exist and be named correctly
-   - The libvirt domain name is set via the VM_BASE_NAME env var on the SFU.
-   - Default used in dev: "flicker-node"
-   - The base VM must be SHUT OFF (not running) at all times — it is used
-     as a clone source. If it is running when virt-clone is called, the
-     clone will fail.
-   - To shut it off: virsh shutdown flicker-node
+## Per-Room Configuration
 
-4. env var: VM_BASE_NAME
-   - Set in the SFU's .env file on the server.
-   - Value: the libvirt domain name of the base VM (e.g. VM_BASE_NAME=flicker-node)
+Before starting each clone, the SFU writes `/etc/vmagent.env` with mode `0600`:
 
+```dotenv
+SFU_FORWARD_ADDR=<sfu-tailnet-ip>
+SFU_GRPC_ADDR=<sfu-tailnet-ip>:<grpc-port>
+SFU_GRPC_AUTH_TOKEN=<shared-agent-token>
+ROOM_ID=<room-uuid>
+AUDIO_PORT=<reserved-sfu-udp-port>
+VIDEO_PORT=<reserved-sfu-udp-port>
+LISTEN_PORT=5000
+```
 
-=== BASE VM IMAGE REQUIREMENTS ===
+The VM agent receives `DISPLAY=:0` from its systemd unit. It exits immediately if `xdotool` or `DISPLAY` is unavailable, making an image misconfiguration visible in `journalctl -u vmagent`.
 
-5. OS: Debian 12 (or compatible systemd-based distro)
-   - The current base image is debian12-xfce.qcow2.
-   - Must use systemd as init system (required for the vmagent service).
+## Lifecycle
 
-6. vmagent binary at /usr/local/bin/vmagent
-   - Injected by the CI/CD pipeline on every push to main via:
-       virt-customize -d flicker-node \
-         --upload /tmp/vmagent-binary:/usr/local/bin/vmagent \
-         --chmod 0755:/usr/local/bin/vmagent
-   - The base VM must be shut off when this runs.
-   - Do NOT manually install vmagent into the image — CI owns this.
+`CreateRoom` reserves RTP ports, starts ingest, clones the base disk, writes the agent configuration, and starts `flicker-<room-id>`. A room is `provisioning` until RTP arrives, then `ready`; provisioning errors are exposed as `failed` and stop ingest.
 
-7. vmagent systemd service
-   - Must be installed at: /etc/systemd/system/vmagent.service
-   - Must be enabled: systemctl enable vmagent
-   - The service must use EnvironmentFile to read /etc/vmagent.env, which
-     is written into each cloned disk by the SFU before the VM starts.
-   - Minimal unit file:
+`DeleteRoom` cancels provisioning, stops ingest, force-stops the domain, undefines it, and removes its storage.
 
-       [Unit]
-       Description=Flicker VM Agent
-       After=network-online.target
-       Wants=network-online.target
+## Transport Security
 
-       [Service]
-       EnvironmentFile=/etc/vmagent.env
-       ExecStart=/usr/local/bin/vmagent
-       Restart=on-failure
-       RestartSec=5
-
-       [Install]
-       WantedBy=multi-user.target
-
-   - /etc/vmagent.env does NOT need to exist in the base image. The SFU
-     writes it into each clone's disk (via virt-customize) before starting
-     the VM. If vmagent starts before the file exists, it will fail and
-     systemd will retry (RestartSec=5).
-
-8. GStreamer must be installed
-   - The vmagent spawns gst-launch-1.0 to stream audio/video to the SFU.
-   - Required packages:
-       apt install gstreamer1.0-tools \
-                   gstreamer1.0-plugins-base \
-                   gstreamer1.0-plugins-good \
-                   gstreamer1.0-plugins-bad
-
-9. Network: libvirt default NAT network
-   - The VM uses the libvirt default network (192.168.122.0/24).
-   - The VM can reach the SFU's Tailscale IP from inside the VM because
-     the host is on Tailscale and the libvirt NAT routes through it.
-   - No port-forwarding into the VM is required. The VM only makes
-     outbound connections (UDP RTP to SFU, TCP gRPC to SFU).
-
-10. No cloud-init required
-    - Config is injected by the SFU directly into each cloned disk offline
-      using virt-customize before the VM starts. cloud-init is not used.
-
-
-=== ENVIRONMENT VARIABLES WRITTEN PER CLONE ===
-
-The SFU writes /etc/vmagent.env into each cloned disk before starting the VM.
-The vmagent systemd service reads these at startup via EnvironmentFile:
-
-  SFU_FORWARD_ADDR   Tailscale IP of the SFU. GStreamer sends RTP here.
-  SFU_GRPC_ADDR      host:port of the SFU gRPC server (e.g. 100.x.x.x:50051).
-  ROOM_ID            UUID of the room this VM belongs to.
-  AUDIO_PORT         UDP port on the SFU to send audio RTP to.
-  VIDEO_PORT         UDP port on the SFU to send video RTP to.
-  LISTEN_PORT        Local port for the vmagent (currently unused, set to 5000).
-
-
-=== VM LIFECYCLE (per room) ===
-
-  CreateRoom called
-    → virt-clone --original flicker-node --name flicker-{roomID} --auto-clone
-    → virt-customize writes /etc/vmagent.env into the clone's disk
-    → virsh start flicker-{roomID}
-    → VM boots, vmagent service starts, GStreamer begins streaming RTP to SFU
-
-  DeleteRoom called
-    → virsh destroy flicker-{roomID}   (force stop)
-    → virsh undefine flicker-{roomID} --remove-all-storage  (delete VM + disk)
-
-
-=== KNOWN LIMITATIONS / FUTURE WORK ===
-
-- GStreamer currently uses audiotestsrc / videotestsrc (test patterns, no real
-  screen/audio capture). Replace with ximagesrc + pulsesrc once the desktop
-  environment is confirmed working in the VM.
-
-- VM boot time: typically 20-40 seconds before vmagent is ready and streaming.
-  The room is created and listed immediately; the stream goes live after boot.
-
-- virt-customize is called per room creation (to inject /etc/vmagent.env).
-  It takes ~2-5 seconds per invocation (offline disk operation, no full boot).
-  This adds latency to room creation but is acceptable.
-
-- The base VM (flicker-node) must remain shut off at all times on the server.
-  It is a template, not a running instance.
-
-- No authentication on the vmagent or gRPC stream. Any process that knows
-  the gRPC port can connect. Add mTLS before shipping publicly.
+The VM agent connects only to the SFU's Tailnet-bound gRPC endpoint and authenticates with `SFU_GRPC_AUTH_TOKEN`. This is suitable for a private Tailnet. Configure mTLS or per-VM credentials before crossing a separate trust boundary.

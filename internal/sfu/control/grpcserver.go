@@ -18,15 +18,17 @@ type GRPCServer struct {
 	streams     map[string]controlpb.InputService_StreamInputsServer
 	mu          sync.RWMutex
 	port        string
+	authToken   string
 }
 
-func NewGRPCServer(logger *slog.Logger, port string, commandCh <-chan *CommandEvent) *GRPCServer {
+func NewGRPCServer(logger *slog.Logger, port string, authToken string, commandCh <-chan *CommandEvent) *GRPCServer {
 	return &GRPCServer{
 		logger:      logger,
 		controlRecv: commandCh,
 		streams:     make(map[string]controlpb.InputService_StreamInputsServer),
 		mu:          sync.RWMutex{},
 		port:        port,
+		authToken:   authToken,
 	}
 }
 
@@ -37,14 +39,27 @@ func (s *GRPCServer) Start(ctx context.Context) {
 		case <-ctx.Done():
 			s.logger.Info("Control Service shutting down...")
 			return
-		case controlMsg := <-s.controlRecv:
+		case controlMsg, ok := <-s.controlRecv:
+			if !ok {
+				return
+			}
 			s.logger.Debug("received controlMsg", "controlMSG", controlMsg)
 
 			msgProto := serializeMessage(controlMsg)
+			if msgProto == nil {
+				s.logger.Warn("dropping unknown control message", "type", controlMsg.Type, "roomID", controlMsg.RoomID)
+				continue
+			}
 
 			s.mu.RLock()
-			err := s.streams[controlMsg.RoomID].Send(msgProto)
+			stream := s.streams[controlMsg.RoomID]
 			s.mu.RUnlock()
+			if stream == nil {
+				s.logger.Warn("dropping control message with no connected agent", "roomID", controlMsg.RoomID)
+				continue
+			}
+
+			err := stream.Send(msgProto)
 
 			if err != nil {
 				s.logger.Error("error sending message", "err", err, "roomID", controlMsg.RoomID, "msg", controlMsg)
@@ -65,6 +80,9 @@ func (s *GRPCServer) StreamInputs(_ *emptypb.Empty, stream controlpb.InputServic
 	if len(roomIDs) == 0 {
 		s.logger.Error("agent sent no roomID when connecting")
 		return fmt.Errorf("agent tried connecting with no roomID")
+	}
+	if authorization := md.Get("authorization"); len(authorization) != 1 || authorization[0] != "Bearer "+s.authToken {
+		return fmt.Errorf("unauthorized control agent")
 	}
 
 	s.mu.Lock()
@@ -98,6 +116,7 @@ func serializeMessage(controlMessage *CommandEvent) *controlpb.InputMessage {
 				Mouse: &controlpb.MouseInput{
 					X:        controlMessage.X,
 					Y:        controlMessage.Y,
+					Action:   controlMessage.Action,
 					Dragging: controlMessage.Dragging,
 				},
 			},

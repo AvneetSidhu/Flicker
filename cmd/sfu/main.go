@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -51,6 +52,10 @@ func loadConfig() (*sfu.Config, error) {
 	if grpcPort == "" {
 		return nil, fmt.Errorf("missing SFU_GRPC_PORT")
 	}
+	grpcAuthToken := os.Getenv("SFU_GRPC_AUTH_TOKEN")
+	if grpcAuthToken == "" {
+		return nil, fmt.Errorf("missing SFU_GRPC_AUTH_TOKEN")
+	}
 
 	vmBaseName := os.Getenv("VM_BASE_NAME")
 	if vmBaseName == "" {
@@ -58,25 +63,26 @@ func loadConfig() (*sfu.Config, error) {
 	}
 
 	return &sfu.Config{
-		Port:       wsPort,
-		Tailnet:    tailnet,
-		LogLevel:   logLevel,
-		GRPCPort:   grpcPort,
-		VMBaseName: vmBaseName,
+		Port:          wsPort,
+		Tailnet:       tailnet,
+		LogLevel:      logLevel,
+		GRPCPort:      grpcPort,
+		GRPCAuthToken: grpcAuthToken,
+		VMBaseName:    vmBaseName,
 	}, nil
 }
 
 func startGRPCServer(ctx context.Context, cfg *sfu.Config, logger *slog.Logger, controlMessageEventBus <-chan *control.CommandEvent) error {
-	server := control.NewGRPCServer(logger, cfg.GRPCPort, controlMessageEventBus)
+	server := control.NewGRPCServer(logger, cfg.GRPCPort, cfg.GRPCAuthToken, controlMessageEventBus)
 	grpcServer := grpc.NewServer()
 
 	controlpb.RegisterInputServiceServer(grpcServer, server)
 
 	go server.Start(ctx)
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", cfg.GRPCPort))
+	lis, err := net.Listen("tcp", net.JoinHostPort(cfg.Tailnet, cfg.GRPCPort))
 	if err != nil {
-		logger.Error("failed to listen: %v", err)
+		logger.Error("failed to listen", "err", err)
 		return err
 	}
 
@@ -118,8 +124,21 @@ func startWebSocketServer(ctx context.Context, cfg *sfu.Config, logger *slog.Log
 			http.Error(w, "roomID required", http.StatusBadRequest)
 			return
 		}
-		logger.Info("deleting room", "roomID", roomID)
-		if err := roomManager.DeleteRoom(roomID); err != nil {
+		ownerID := r.Header.Get("X-Flicker-User-ID")
+		if ownerID == "" {
+			http.Error(w, "room owner identity required", http.StatusUnauthorized)
+			return
+		}
+		logger.Info("deleting room", "roomID", roomID, "ownerID", ownerID)
+		if err := roomManager.DeleteRoomForOwner(roomID, ownerID); err != nil {
+			if errors.Is(err, room.ErrRoomNotFound) {
+				http.Error(w, "room not found", http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, room.ErrNotRoomOwner) {
+				http.Error(w, "only the room owner can delete this room", http.StatusForbidden)
+				return
+			}
 			logger.Error("failed to delete room", "roomID", roomID, "err", err)
 			http.Error(w, "failed to delete room", http.StatusInternalServerError)
 			return
@@ -187,9 +206,10 @@ func main() {
 	ingestService := ingest.NewIngestManager(logger)
 
 	vmService := vm.NewVMService(logger, vm.VMServiceConfig{
-		BaseDomain: cfg.VMBaseName,
-		SFUHost:    cfg.Tailnet,
-		GRPCPort:   cfg.GRPCPort,
+		BaseDomain:    cfg.VMBaseName,
+		SFUHost:       cfg.Tailnet,
+		GRPCPort:      cfg.GRPCPort,
+		GRPCAuthToken: cfg.GRPCAuthToken,
 	})
 
 	roomManager := room.NewRoomManager(logger, controlMessageEventBus, ingestService, vmService)

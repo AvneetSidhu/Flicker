@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"log/slog"
+	"net"
 	"sync"
 )
 
@@ -24,19 +25,21 @@ func NewIngestManager(logger *slog.Logger) *IngestManager {
 	}
 }
 
-func (i *IngestManager) AddRoom(roomID string, audioPort int, videoPort int, room Room, onReady func(), ctx context.Context) {
+func (i *IngestManager) AddRoom(roomID string, audioListener net.PacketConn, videoListener net.PacketConn, room Room, onReady func(), ctx context.Context) {
 	ingestWorker := &ingestWorker{
-		audioPort: audioPort,
-		videoPort: videoPort,
-		room:      room,
-		onReady:   onReady,
-		bufPool:   &i.bufPool,
-		logger:    i.logger,
-		roomID:    roomID,
+		audioPort:     audioListener.LocalAddr().(*net.UDPAddr).Port,
+		videoPort:     videoListener.LocalAddr().(*net.UDPAddr).Port,
+		room:          room,
+		onReady:       onReady,
+		bufPool:       &i.bufPool,
+		logger:        i.logger,
+		roomID:        roomID,
+		audioListener: audioListener,
+		videoListener: videoListener,
 	}
 
-	go ingestWorker.StartIngest(ctx)
 	i.rooms.Store(roomID, ingestWorker)
+	go ingestWorker.StartIngest(ctx)
 }
 
 func (i *IngestManager) RemoveRoom(roomID string) {

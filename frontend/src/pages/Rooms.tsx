@@ -13,19 +13,23 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useWebSocket } from "@/context/websocketcontext";
+import { type WebSocketMessage, useWebSocket } from "@/context/websocketcontext";
 
 interface Room {
   id: string;
   name: string;
   creator: string;
+  ownerId: string;
   viewers: number;
   isLive: boolean;
+  vmState: "provisioning" | "ready" | "failed";
+  failure?: string;
 }
 
 const Rooms = () => {
   const navigate = useNavigate();
   const [displayName, setDisplayName] = useState("");
+  const [userId, setUserId] = useState("");
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
@@ -49,6 +53,7 @@ const Rooms = () => {
       return;
     }
     setDisplayName(name);
+    setUserId(localStorage.getItem("userId") ?? "");
     fetchRooms();
 
     if (!isConnected && !isConnecting) {
@@ -63,10 +68,11 @@ const Rooms = () => {
 
   // Navigate into a room once the backend confirms creation and returns the roomId
   useEffect(() => {
-    const onMessage = (msg: any) => {
-      if (msg.type === "room-created" && msg.payload?.roomId) {
+    const onMessage = (msg: WebSocketMessage) => {
+      const roomID = typeof msg.payload?.roomId === "string" ? msg.payload.roomId : "";
+      if (msg.type === "room-created" && roomID) {
         fetchRooms();
-        navigate(`/room/${msg.payload.roomId}`);
+        navigate(`/room/${roomID}`);
       }
     };
     addMessageListener(onMessage);
@@ -92,7 +98,10 @@ const Rooms = () => {
   const handleDeleteRoom = async (e: React.MouseEvent, roomId: string) => {
     e.stopPropagation();
     try {
-      await fetch(`/rooms/${roomId}`, { method: "DELETE" });
+      await fetch(`/rooms/${roomId}`, {
+        method: "DELETE",
+        headers: { "X-Flicker-User-ID": userId },
+      });
       fetchRooms();
     } catch {
       // ignore
@@ -209,6 +218,14 @@ const Rooms = () => {
                     LIVE
                   </div>
                 )}
+                {room.vmState === "failed" && (
+                  <div
+                    className="px-3 py-1 rounded bg-destructive/15 text-destructive text-xs font-semibold"
+                    title={room.failure}
+                  >
+                    FAILED
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2 ml-auto">
                   {/* Viewers */}
@@ -218,13 +235,15 @@ const Rooms = () => {
                   </div>
 
                   {/* Delete */}
-                  <button
-                    onClick={(e) => handleDeleteRoom(e, room.id)}
-                    className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                    title="Delete room"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {room.ownerId === userId && (
+                    <button
+                      onClick={(e) => handleDeleteRoom(e, room.id)}
+                      className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                      title="Delete room"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
 

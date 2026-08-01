@@ -69,7 +69,9 @@ jobs:
           ConditionPathExists=/etc/vmagent.env
 
           [Service]
+          # The base VM image must include xdotool and permit local X11 access.
           EnvironmentFile=/etc/vmagent.env
+          Environment=DISPLAY=:0
           ExecStart=/usr/local/bin/vmagent
           Restart=on-failure
           RestartSec=5

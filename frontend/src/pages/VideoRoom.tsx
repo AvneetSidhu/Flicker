@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { ArrowLeft, Volume2, VolumeX, Maximize, Users, Power, Loader2 } from "lucide-react";
-import { useWebSocket } from "@/context/websocketcontext";
+import { type WebSocketMessage, useWebSocket } from "@/context/websocketcontext";
 
 interface Watcher {
   id: string;
@@ -22,6 +22,7 @@ const VideoRoom = () => {
   const [watchers, setWatchers] = useState<Watcher[]>([]);
   const [vmState, setVMState] = useState<VMState>("idle");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [hasControl, setHasControl] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
@@ -64,7 +65,19 @@ const VideoRoom = () => {
     }
   }, []);
 
-  const handleSignalMessage = useCallback(async (msg: any) => {
+  const handleSignalMessage = useCallback(async (msg: WebSocketMessage) => {
+    if (msg.type === "control-state") {
+      setHasControl(Boolean(msg.payload?.granted));
+      return;
+    }
+    if (msg.type === "room-presence" && Array.isArray(msg.payload?.viewers)) {
+      setWatchers(msg.payload.viewers.map((viewer: { id: string; name: string }) => ({
+        id: viewer.id,
+        name: viewer.name,
+        joinedAt: new Date(),
+      })));
+      return;
+    }
     console.log("[Signal] received message type:", msg.type);
     if (!pcRef.current) {
       console.warn("[Signal] no PeerConnection yet, ignoring", msg.type);
@@ -86,6 +99,10 @@ const VideoRoom = () => {
       }
     }
   }, []);
+
+  const toggleControl = useCallback(() => {
+    sendJson({ type: hasControl ? "release-control" : "request-control", payload: {} });
+  }, [hasControl, sendJson]);
 
   const startWebRTC = useCallback(async () => {
     if (!roomId || pcRef.current || webrtcStartingRef.current) return;
@@ -160,7 +177,10 @@ const VideoRoom = () => {
     }
 
     try {
-      await fetch(`/rooms/${roomId}`, { method: "DELETE" });
+      await fetch(`/rooms/${roomId}`, {
+        method: "DELETE",
+        headers: { "X-Flicker-User-ID": localStorage.getItem("userId") ?? "" },
+      });
     } catch (err) {
       console.error("[VM] failed to delete room", err);
     }
@@ -176,6 +196,45 @@ const VideoRoom = () => {
       removeMessageListener(handleSignalMessage);
     };
   }, [socket, isConnected, addMessageListener, removeMessageListener, handleSignalMessage]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !hasControl) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      sendJson({ type: "keyboard", payload: { key: event.key, action: "down" } });
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      event.preventDefault();
+      sendJson({ type: "keyboard", payload: { key: event.key, action: "up" } });
+    };
+    const onMouse = (event: MouseEvent) => {
+      const rect = video.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      sendJson({ type: "mouse", payload: { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height, action: event.type === "mousemove" ? "move" : event.type, dragging: event.buttons > 0 } });
+    };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      sendJson({ type: "scroll", payload: { direction: event.deltaY < 0 ? "up" : "down" } });
+    };
+
+    video.tabIndex = 0;
+    video.addEventListener("keydown", onKeyDown);
+    video.addEventListener("keyup", onKeyUp);
+    video.addEventListener("mousemove", onMouse);
+    video.addEventListener("mousedown", onMouse);
+    video.addEventListener("mouseup", onMouse);
+    video.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      video.removeEventListener("keydown", onKeyDown);
+      video.removeEventListener("keyup", onKeyUp);
+      video.removeEventListener("mousemove", onMouse);
+      video.removeEventListener("mousedown", onMouse);
+      video.removeEventListener("mouseup", onMouse);
+      video.removeEventListener("wheel", onWheel);
+    };
+  }, [hasControl, sendJson]);
 
   const toggleMute = () => {
     if (videoRef.current) {
@@ -226,6 +285,9 @@ const VideoRoom = () => {
               <Users className="w-4 h-4" />
               <span>{watchers.length} watching</span>
             </div>
+            <Button size="sm" variant={hasControl ? "secondary" : "outline"} onClick={toggleControl} disabled={!isConnected}>
+              {hasControl ? "Release Control" : "Request Control"}
+            </Button>
 
             {/* Launch / Stop button */}
             {vmState === "idle" && (

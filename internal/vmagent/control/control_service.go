@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/AvneetSidhu/Flicker/api/controlpb"
 	"google.golang.org/grpc/metadata"
@@ -12,51 +13,56 @@ import (
 )
 
 type ControlService struct {
-	client controlpb.InputServiceClient
-	logger *slog.Logger
-	ch     chan<- *controlpb.InputMessage
-	roomID string
+	client     controlpb.InputServiceClient
+	logger     *slog.Logger
+	ch         chan<- *controlpb.InputMessage
+	roomID     string
+	authToken  string
+	retryDelay time.Duration
 }
 
-func NewControlService(client controlpb.InputServiceClient, inputForwardingChan chan<- *controlpb.InputMessage, logger *slog.Logger, roomID string) *ControlService {
-	return &ControlService{client: client, ch: inputForwardingChan, logger: logger, roomID: roomID}
+func NewControlService(client controlpb.InputServiceClient, inputForwardingChan chan<- *controlpb.InputMessage, logger *slog.Logger, roomID string, authToken string) *ControlService {
+	return &ControlService{client: client, ch: inputForwardingChan, logger: logger, roomID: roomID, authToken: authToken, retryDelay: time.Second}
 }
 
 func (s *ControlService) StartControlStream(ctx context.Context) {
-	md := metadata.Pairs("room-id", s.roomID)
-	streamctx := metadata.NewOutgoingContext(ctx, md)
+	for {
+		if err := s.receiveStream(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("control stream disconnected; retrying", "err", err, "roomID", s.roomID)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.retryDelay):
+		}
+	}
+}
 
+func (s *ControlService) receiveStream(ctx context.Context) error {
+	streamctx := metadata.NewOutgoingContext(ctx, metadata.Pairs("room-id", s.roomID, "authorization", "Bearer "+s.authToken))
 	stream, err := s.client.StreamInputs(streamctx, &emptypb.Empty{})
 	if err != nil {
-		s.logger.Error("error initiating gRPC stream", slog.Any("error", err))
-		return
+		return err
 	}
-	defer close(s.ch)
-
+	s.logger.Info("control stream connected", "roomID", s.roomID)
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				s.logger.Info("stream ended by server", slog.Any("info", err))
-				return
+				return io.EOF
 			}
-
-			select {
-			case <-ctx.Done():
-				s.logger.Info("shutdown signal received: shutting down input stream in control service")
-				return
-			default:
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-
-			s.logger.Error("error receiving from stream in control service", slog.Any("error", err))
-			continue
+			return err
 		}
-
 		select {
 		case s.ch <- msg:
 		case <-ctx.Done():
-			s.logger.Info("shutdown signal received while sending message to channel")
-			return
+			return ctx.Err()
 		}
 	}
 }
